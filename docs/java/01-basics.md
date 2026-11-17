@@ -2,6 +2,46 @@
 
 > 面向有 TypeScript / Node.js 经验的前端工程师
 
+这一章的目标是：**看懂变量声明、条件、循环和方法调用，并能独立运行一个小程序**。先学类型、变量、常用运算、控制流程、数组、字符串和基本异常处理；位运算、带标签的跳转、函数式接口全表可以用到时再看。
+
+## 先跑通一个程序
+
+本章按 **JDK 21** 编写，不需要预览特性或第三方依赖。先把下面的内容保存为 `Main.java`：
+
+```java
+public class Main {
+    public static void main(String[] args) {
+        String name = "Alice";
+        int age = 20;
+        System.out.println(name + " 明年 " + (age + 1) + " 岁");
+    }
+}
+```
+
+在这个文件所在目录运行：
+
+```bash
+javac Main.java
+java Main
+```
+
+输出为 `Alice 明年 21 岁`。第一条命令编译出 `Main.class`，第二条启动程序；也可以用 JDK 21 的 `java Main.java` 直接运行这个单文件程序。后面若增加其他 `.java` 文件，需要先把它们一起编译，再用 `java Main` 启动，不能继续依赖单文件源码运行。
+
+第一次看到外层结构，先这样读：
+
+| 写法 | 这里的意思 |
+|------|------------|
+| `public class Main` | 定义一个名为 `Main`、可被外部访问的类；这里的文件名必须是 `Main.java` |
+| `{ ... }` | 括号内是这一层包含的代码；类中有方法，方法中有语句 |
+| `public static void main(String[] args)` | 程序入口，Java 启动时从这里执行 |
+| `static` | 入口属于类，不必先创建 `Main` 对象 |
+| `void` | 方法不返回结果；它仍可以打印内容或修改数据 |
+| `String[] args` | 启动时传入的字符串数组，本例没有使用 |
+| `String name = "Alice";` | 声明字符串变量 `name`，赋值为 `"Alice"`；分号结束语句 |
+| `System.out.println(...)` | 调用打印方法，打印括号内的值并换行，可类比 `console.log(...)` |
+
+**后面的代码怎么运行？** 标为普通语句的代码放进上面的 `main`，每个例子单独运行，避免重复声明同名变量。`import` 必须放在类定义前面；方法放在类里面、`main` 外面；独立的 `public class` 放进同名文件。含 `...` 或注明“结构示意”的片段只用于阅读，不能整块复制编译。
+
 ## 目录 {#toc}
 
 - [1. 类型系统](#type-system)
@@ -17,9 +57,9 @@
 
 ## 1. 类型系统 {#type-system}
 
-Java 是**强静态类型**语言，所有变量在声明时必须指定类型，且编译期就会检查类型错误。
+Java 的变量有确定的类型。例如 `int age = 20` 表示 `age` 用来保存整数，不能再赋值为字符串 `"二十"`。编译器会检查这些类型约束；用 `var` 时由编译器推断类型，也不会变成动态类型。
 
-💡 **对比 JS**：TypeScript 也是静态类型，但 TS 只是编译器层面，最终还是 JS。Java 的类型系统是真正的运行时保障。
+💡 **对比 TS**：两者都有静态类型检查。Java 的类和部分类型信息也存在于运行时，但这不代表所有输入都合法，例如外部数据仍需校验，`null` 仍可能导致错误，泛型参数通常会擦除。
 
 ### 1.1 8种基本类型（Primitive Types）
 
@@ -28,18 +68,22 @@ Java 是**强静态类型**语言，所有变量在声明时必须指定类型�
 | `byte` | 1字节 | -128 ~ 127 | 0 | — |
 | `short` | 2字节 | -32768 ~ 32767 | 0 | — |
 | `int` | 4字节 | -2^31 ~ 2^31-1 | 0 | `number` |
-| `long` | 8字节 | -2^63 ~ 2^63-1 | 0L | `bigint` |
+| `long` | 8字节 | -2^63 ~ 2^63-1 | 0L | 固定范围整数，不等同于任意精度的 `bigint` |
 | `float` | 4字节 | 单精度浮点 | 0.0f | — |
 | `double` | 8字节 | 双精度浮点 | 0.0 | `number` |
-| `boolean` | 1bit | true / false | false | `boolean` |
-| `char` | 2字节 | Unicode 字符 | '\u0000' | `string`(单字符) |
+| `boolean` | 语言规范未固定存储大小 | true / false | false | `boolean` |
+| `char` | 2字节 | 一个 UTF-16 代码单元 | '\u0000' | 不一定能表示一个完整字符，如部分 emoji 需两个 `char` |
+
+表中的默认值针对**字段和数组元素**。方法中的局部变量必须先赋值才能读取。
+
+下面是普通语句，先记住常用的 `int`、`long`、`double`、`boolean`，其余用到时查表：
 
 ```java
 // 基本类型声明示例
 byte age = 25;
 short year = 2024;
 int count = 1_000_000;      // Java 7+ 支持数字分隔符，提高可读性
-long population = 8_000_000_000L;  // long 字面量必须加 L
+long population = 8_000_000_000L;  // 超出 int 范围的整数字面量要加 L
 float price = 9.99f;        // float 字面量必须加 f
 double pi = 3.14159265358979;
 boolean isActive = true;
@@ -48,7 +92,9 @@ char grade = 'A';           // 注意：单引号，不是双引号
 
 > ⚠️ **注意**：Java 的 `int` 是 32 位，不像 JS 的 `number` 是 64 位浮点数。处理大数时用 `long`，或者 `BigInteger`/`BigDecimal`。
 
-> ⚠️ **注意**：`float` 精度低，金融计算**绝对不能**用 `float` 或 `double`，要用 `BigDecimal`。
+> ⚠️ **注意**：`float` 和 `double` 不能精确表示许多十进制小数。需要精确金额时，常用 `BigDecimal` 或约定单位的整数，并明确舍入规则。
+
+下面先在文件顶部加入 `import java.math.BigDecimal;`，再把计算放入 `main`。`new` 表示创建对象，`BigDecimal("0.1")` 是用字符串构造精确十进制数；`x.add(y)` 返回相加后的新值。
 
 ```java
 // 金融计算的坑
@@ -56,7 +102,6 @@ double a = 0.1 + 0.2;
 System.out.println(a);  // 0.30000000000000004 ← 经典浮点精度问题
 
 // ✅ 推荐：金融场景用 BigDecimal
-import java.math.BigDecimal;
 BigDecimal x = new BigDecimal("0.1");
 BigDecimal y = new BigDecimal("0.2");
 System.out.println(x.add(y));  // 0.3 ✓
@@ -65,6 +110,8 @@ System.out.println(x.add(y));  // 0.3 ✓
 ### 1.2 包装类（Wrapper Classes）
 
 每个基本类型都有对应的**引用类型（包装类）**：
+
+先理解 `int` 与 `Integer`：前者直接表示整数值；后者是对象类型，可以为 `null`，也可以用在 `List<Integer>` 这样的泛型中。`Integer.parseInt("123")` 表示“调用 `Integer` 提供的转换方法，把字符串变成整数”，不是访问某个对象的字段。
 
 | 基本类型 | 包装类 |
 |---------|-------|
@@ -95,6 +142,8 @@ int fromHex = Integer.parseInt("ff", 16);    // 255
 
 Java 会自动在基本类型和包装类之间转换：
 
+这一例在文件顶部加入 `import java.util.List;` 和 `import java.util.ArrayList;`。`List<Integer>` 可以读成“元素类型为 `Integer` 的列表”，`<>` 是类型参数的位置，第二章会展开解释。
+
 ```java
 // 自动装箱：int → Integer
 Integer a = 5;          // 等价于 Integer a = Integer.valueOf(5);
@@ -118,11 +167,13 @@ System.out.println(x == y);   // true  ← 因为 [-128, 127] 有缓存
 
 Integer p = 200;
 Integer q = 200;
-System.out.println(p == q);   // false ← 超出缓存范围，是两个不同对象！
+System.out.println(p == q);   // 常见默认配置下为 false；缓存范围可能扩展，不依赖这个结果
 
 // ✅ 推荐：比较包装类用 equals()
 System.out.println(p.equals(q));  // true ✓
 ```
+
+`==` 在两个包装对象之间比较“是不是同一个对象”，不适合比较数字内容。`p.equals(q)` 比较内容，但要求 `p` 非空；允许两端为空时可用 `java.util.Objects.equals(p, q)`。同样，`Integer missing = null; int value = missing;` 会在拆箱时抛出 `NullPointerException`。
 
 ### 1.4 String 类型
 
@@ -161,9 +212,11 @@ var count = 42;             // 推断为 int
 var list = new ArrayList<String>();  // 推断为 ArrayList<String>
 ```
 
+这里的 `ArrayList` 需要 `import java.util.ArrayList;`。即使使用 `var`，`count` 仍是 `int`，不能执行 `count = "四十二"`。
+
 > ⚠️ **注意**：`var` 只能用于**局部变量**，不能用于字段（类成员变量）。
 
-```javascript
+```typescript
 // JS/TS 对比
 let age: number = 25;
 const name: string = "Alice";
@@ -176,16 +229,24 @@ let isStudent: boolean = true;
 // Java 常量用 final 关键字
 final int MAX_SIZE = 100;
 final String APP_NAME = "MyApp";
+```
 
-// 类常量（static final）
+类常量可以由其他代码通过类名访问。下面的定义保存为 `Config.java`，与 `Main.java` 放在同一目录：
+
+```java
 public class Config {
     public static final int TIMEOUT_MS = 5000;
     public static final String BASE_URL = "https://api.example.com";
 }
+```
 
-// 使用
+在 `Main.main` 中使用：
+
+```java
 System.out.println(Config.TIMEOUT_MS);   // 5000
 ```
+
+这次有两个源文件，在它们所在的目录执行 `javac Main.java Config.java`，再执行 `java Main`。
 
 ```typescript
 // TS 对比
@@ -196,6 +257,8 @@ const APP_NAME: string = "MyApp";
 💡 **对比 JS**：Java 的 `final` 类似 TS 的 `const`，但 `final` 对对象只是引用不可变，对象内部属性仍可修改（和 `const` 完全一样）。
 
 ### 2.3 作用域
+
+作用域是“一个名字在哪些位置能用”。下面是一个完整类，保存为 `ScopeExample.java`；在 `Main.main` 中执行 `new ScopeExample().method();`。运行 `javac Main.java ScopeExample.java`、`java Main`，输出 `30`。
 
 ```java
 public class ScopeExample {
@@ -218,11 +281,36 @@ public class ScopeExample {
 }
 ```
 
+`private` 表示字段只允许类内部访问。`name` 随每个对象各自保存，`static count` 在这个类的对象之间共享；`x`、`y` 则只在各自的大括号范围内可用。此例没有修改 `name` 和 `count`，只用它们展示三种声明位置。
+
+### 2.4 读懂和调用一个方法
+
+方法就是可以反复调用的一段代码。将下面的方法放在 `Main` 类内、`main` 外面：
+
+```java
+public static int add(int a, int b) {
+    return a + b;
+}
+```
+
+从左向右读：`public` 允许外部访问；`static` 允许通过类来调用；第一个 `int` 是返回值类型；`add` 是方法名；`(int a, int b)` 是两个整数参数；`return` 把计算结果交给调用方。
+
+在 `main` 中调用：
+
+```java
+int total = add(2, 3);
+System.out.println(total); // 5
+```
+
+先把 `2`、`3` 分别交给 `a`、`b`，计算 `a + b`，再将返回的 `5` 赋给 `total`。如果返回类型写成 `void`，就不能这样用变量接收结果。
+
 ---
 
 ## 3. 运算符 {#operators}
 
 ### 3.1 算术运算符
+
+`%` 是取余：`10 % 3` 等于 `1`，因为 `10 = 3 × 3 + 1`。`(double) a` 是把 `a` 转成小数类型再参与运算，不会改变变量 `a` 的类型。
 
 ```java
 int a = 10, b = 3;
@@ -258,7 +346,7 @@ double result3 = (double) 5 / 2; // 2.5
 int x = 5, y = 5;
 System.out.println(x == y);   // true ✓
 
-// 引用类型：== 比较引用（内存地址）
+// 引用类型：== 判断是否引用同一个对象
 String s1 = new String("hello");
 String s2 = new String("hello");
 System.out.println(s1 == s2);       // false！两个不同对象
@@ -270,26 +358,26 @@ String s4 = "hello";
 System.out.println(s3 == s4);       // true（共享常量池中的同一对象）
 ```
 
-> ⚠️ **常见坑：字符串比较永远用 equals()**
+> ⚠️ **常见坑：比较字符串内容应使用 equals()**
 
 ```java
-// 场景：用户输入的字符串
-String input = getUserInput();  // 来自外部，不在常量池
+String input = new String("admin"); // 模拟内容相同、对象不同的输入
+System.out.println(input == "admin");      // false
+System.out.println("admin".equals(input)); // true
 
-// ❌ 错误写法
-if (input == "admin") { ... }   // 可能 false！
-
-// ✅ 正确写法
-if ("admin".equals(input)) { ... }  // 注意：常量放前面，防止 NPE
-if (input.equals("admin")) { ... }  // 也可以，但 input 为 null 时会 NPE
+String missing = null;
+System.out.println("admin".equals(missing)); // false，不会抛异常
+// missing.equals("admin") 会因 missing 为 null 抛出异常
 ```
+
+`null` 表示没有对象，不能对它调用实例方法。`equals()` 如何比较由类决定；`String` 已实现了按字符串内容比较，自定义类见第二章。
 
 ### 3.3 逻辑运算符
 
 ```java
 boolean a = true, b = false;
 
-// 短路运算符（和 JS 完全一样）
+// 短路：左边已经能确定结果时，不计算右边
 System.out.println(a && b);   // false
 System.out.println(a || b);   // true
 System.out.println(!a);       // false
@@ -301,7 +389,11 @@ if (x != 0 && 10 / x > 1) {  // x != 0 为 false，后面不执行，不会除�
 }
 ```
 
+这里最后的 `if` 不会打印。与 JS 的差别是，Java 的 `&&`、`||` 要求两边为布尔值，结果也是布尔值；不能用它们返回字符串或对象。
+
 ### 3.4 位运算符
+
+**可后看。** 位运算按二进制的每一位计算；`0b` 表示后面按二进制读取。初学常规业务代码时，先会用 `&&`、`||`，不要把它们与 `&`、`|` 混淆。
 
 ```java
 int a = 0b1010;  // 10
@@ -317,6 +409,8 @@ System.out.println(a >>> 1); // 5            (无符号右移)
 ```
 
 ### 3.5 三元运算符
+
+读法是“条件成立取问号后面的值，否则取冒号后面的值”。
 
 ```java
 int x = 5;
@@ -388,18 +482,24 @@ String dayName = switch (day) {
 System.out.println(dayName);  // "Wednesday"
 ```
 
+这段沿用前例的 `day = 3`。`switch` 选择匹配的分支，箭头右侧给出结果，最后将 `"Wednesday"` 赋给 `dayName`；这里的 `->` 是 switch 规则，不是 Lambda。
+
 ```java
 // switch 也可以用于多行逻辑（用 yield 返回值）
 int result = switch (day) {
     case 1, 2, 3, 4, 5 -> {
         System.out.println("Weekday");
-        yield day * 10;  // yield 替代 return，在 switch 块内使用
+        yield day * 10;  // 给这个 switch 表达式一个结果，不是退出整个方法
     }
     default -> 0;
 };
 ```
 
+仍取 `day = 3` 时，先打印 `Weekday`，再使 `result` 等于 `30`。
+
 ### 4.3 for 循环
+
+`for (int i = 0; i < 5; i++)` 按“初始化一次 → 判断条件 → 执行循环体 → `i++` 加一 → 再判断”的顺序执行。`for (int n : numbers)` 则是“每次从数组中取一个值，命名为 `n`”。
 
 ```java
 // 传统 for 循环
@@ -414,7 +514,7 @@ for (int n : numbers) {
 }
 
 // 遍历集合
-List<String> names = List.of("Alice", "Bob", "Charlie");
+List<String> names = List.of("Alice", "Bob", "Charlie"); // 顶部 import java.util.List;
 for (String name : names) {
     System.out.println(name);
 }
@@ -423,6 +523,8 @@ for (String name : names) {
 💡 **对比 JS**：Java 的增强 for 对应 JS 的 `for...of`，不过 Java 没有 `for...in`（对象属性遍历用 Map）。
 
 ### 4.4 while / do-while
+
+`while` 先判断，再执行；`do-while` 先执行，再判断。两段的输出分别是 `0～4` 和 `j = 0`、`j = 1`、`j = 2`。不要忘了改变循环条件中的变量，否则可能一直循环。
 
 ```java
 // while
@@ -466,11 +568,15 @@ for (int i = 0; i < 3; i++) {
 // 输出：0,0  0,1  0,2  1,0
 ```
 
+前两种先掌握即可。最后一例的 `outer:` 是给外层循环起名，`break outer` 会结束两层循环。
+
 ---
 
 ## 5. 数组 {#arrays}
 
 ### 5.1 一维数组
+
+`int[]` 表示整数数组，`new int[5]` 表示创建 5 个位置。下标从 `0` 开始，因此第 5 个位置是 `arr[4]`；赋值不会自动扩容。
 
 ```java
 // 声明并初始化
@@ -502,6 +608,8 @@ for (int n : nums) {
 
 ### 5.2 二维数组
 
+先把它理解为“数组里放数组”：`matrix[1]` 取第 2 行，`matrix[1][2]` 再取这一行的第 3 个值。嵌套循环的外层依次取行，内层依次取该行的值。
+
 ```java
 // 声明二维数组（矩阵）
 int[][] matrix = {
@@ -529,7 +637,11 @@ jagged[1] = new int[]{2, 3};
 jagged[2] = new int[]{4, 5, 6};
 ```
 
+`printf("%3d", val)` 打印一个至少占 3 列的整数，因此三行会对齐；输出依次是 `1 2 3`、`4 5 6`、`7 8 9`。`matrix[0].length` 仅代表第 1 行长度，不能代表所有不规则数组的列数。
+
 ### 5.3 Arrays 工具类
+
+`Arrays` 是 JDK 提供的工具类，先导入，再在 `main` 中调用。`sort(arr)` **修改原数组**；`copyOf` 和 `copyOfRange` 返回新数组，后者范围含起点、不含终点，所以索引 `[1, 4)` 对应 `2、3、4`。
 
 ```java
 import java.util.Arrays;
@@ -580,68 +692,58 @@ String replaced = s.replace("l", "r");
 
 ### 6.2 常用字符串方法
 
+先运行几个最常用的操作，下面都是放进 `main` 的普通语句：
+
 ```java
-String str = "  Hello, World!  ";
-
-// 长度
-str.length()                    // 17
-
-// 去空格
-str.trim()                      // "Hello, World!"
-str.strip()                     // Java 11+，处理 Unicode 空白
-
-// 大小写
-str.toUpperCase()               // "  HELLO, WORLD!  "
-str.toLowerCase()               // "  hello, world!  "
-
-// 包含/查找
-str.contains("World")          // true
-str.indexOf("o")               // 5（第一个 'o' 的位置）
-str.lastIndexOf("o")           // 9（最后一个 'o'）
-str.startsWith("  H")          // true
-str.endsWith("  ")             // true
-
-// 截取
-str.trim().substring(7)        // "World!"
-str.trim().substring(7, 12)    // "World"
-
-// 分割（类似 JS 的 split）
-String csv = "a,b,c,d";
-String[] parts = csv.split(",");  // ["a", "b", "c", "d"]
-
-// 替换
-str.replace("World", "Java")   // "  Hello, Java!  "
-str.replaceAll("\\s+", " ")    // 正则替换，多个空格变一个
-
-// 连接
-String.join(", ", "a", "b", "c")   // "a, b, c"
-String.join("-", List.of("x", "y")); // "x-y"
-
-// 判断空
-str.isEmpty()                  // false（只有长度为0时为true）
-str.isBlank()                  // false（Java 11+，全是空白字符才为true）
-"  ".isBlank()                 // true
-
-// 转换
-"42".equals("42")              // true（字符串比较）
-Integer.parseInt("42")         // 42（转 int）
-String.valueOf(42)             // "42"（转 String）
-42 + ""                        // "42"（利用字符串连接，不推荐）
-
-// 字符操作
-str.charAt(2)                  // ' '（索引2的字符）
-str.toCharArray()              // char 数组
+String text = "  Hello, World!  ";
+String cleaned = text.strip(); // 返回去掉两端空白的新字符串
+System.out.println(cleaned);   // Hello, World!
+System.out.println(text.length()); // 17，原字符串仍有两端空格
+System.out.println(cleaned.substring(7, 12)); // World
+System.out.println(cleaned.contains("World")); // true
 ```
+
+`text.strip()` 读作“对 text 指向的字符串调用 strip 方法”。`substring(7, 12)` 截取下标 7 到 11，**不含下标 12**。连续写 `text.strip().substring(7, 12)`，就是先用第一个方法的返回值，再调用第二个方法。
+
+其他方法作为速查即可。表中 `text` 仍是 `"  Hello, World!  "`；想查看结果可写 `System.out.println(表中的表达式);`。
+
+| 需求 | 表达式 | 结果或含义 |
+|------|--------|------------|
+| 去掉两端空白 | `text.trim()` / `text.strip()` | 本例都是 `"Hello, World!"`；`strip` 按 `Character.isWhitespace` 判断空白 |
+| 转大写 / 小写 | `text.toUpperCase()` / `text.toLowerCase()` | 返回新字符串 |
+| 第一次 / 最后一次找到 o | `text.indexOf("o")` / `text.lastIndexOf("o")` | `6` / `10`，未找到返回 `-1` |
+| 判断开头 / 结尾 | `text.startsWith("  H")` / `text.endsWith("  ")` | 都是 `true` |
+| 从下标截到末尾 | `text.strip().substring(7)` | `"World!"` |
+| 普通替换 | `text.replace("World", "Java")` | `"  Hello, Java!  "` |
+| 按正则替换 | `text.replaceAll("\\s+", " ")` | 连续空白合成一个空格，包括两端空白 |
+| 连接多个字符串 | `String.join(", ", "a", "b", "c")` | `"a, b, c"` |
+| 长度是否为零 | `text.isEmpty()` | `false`；`"".isEmpty()` 才是 `true` |
+| 是否为空或全是空白 | `"  ".isBlank()` | `true` |
+| 字符串转整数 | `Integer.parseInt("42")` | 整数 `42`；非法格式会抛异常 |
+| 值转字符串 | `String.valueOf(42)` | 字符串 `"42"` |
+| 取下标处的 char | `text.charAt(2)` | `'H'` |
+| 转 char 数组 | `text.toCharArray()` | 依次包含字符串各 UTF-16 代码单元 |
+
+分割字符串后得到的是数组。顶部加 `import java.util.Arrays;`，打印数组内容时使用 `Arrays.toString`：
+
+```java
+String csv = "a,b,c,d";
+String[] parts = csv.split(",");
+System.out.println(parts[1]); // b
+System.out.println(Arrays.toString(parts)); // [a, b, c, d]
+```
+
+`split` 的参数也是正则表达式。例如按点号分隔需写 `split("\\.")`，不能直接把 `"."` 当成普通点号。
 
 ### 6.3 StringBuilder — 可变字符串
 
 当需要频繁拼接字符串时，用 `StringBuilder`：
 
 ```java
-// ❌ 低效写法（每次 + 都创建新对象）
+// 循环中反复拼接：结果越来越长，会反复复制内容
 String result = "";
 for (int i = 0; i < 1000; i++) {
-    result += i;  // 1000次对象创建！
+    result += i;  // 具体对象分配由编译器和运行时决定
 }
 
 // ✅ 高效写法
@@ -658,10 +760,10 @@ sb2.insert(5, "!");             // Hello!, World
 sb2.delete(5, 6);               // Hello, World
 sb2.reverse();                  // dlroW ,olleH
 sb2.replace(0, 5, "Java");      // 替换子串
-System.out.println(sb2.length()); // 长度
+System.out.println(sb2.length()); // 11
 ```
 
-💡 **对比 JS**：JS 的字符串拼接有 v8 优化（字符串在内部是 rope 结构），但 Java 没有这种优化，所以必须显式用 StringBuilder。
+这两段都生成 `01234567891011...999`。`append(i)` 向同一个构建器追加内容，最后用 `toString()` 取出 `String`。循环中大量拼接可优先考虑 `StringBuilder`；少量 `"姓名: " + name` 很清楚，不必机械改写，Java 编译器和运行时也会优化字符串连接。
 
 ### 6.4 字符串格式化
 
@@ -689,7 +791,7 @@ String json = """
 String msg2 = "姓名: " + name + ", 年龄: " + age;
 ```
 
-💡 **对比 JS**：Java 15+ 的文本块和 JS 的模板字符串非常类似！
+文本块用于书写多行字符串，**不会像 JS 模板字符串那样自动插入变量**。下面的 Java 示例用 `.formatted(name, age)` 依次填入 `%s` 和 `%d`。`%s` 表示字符串、`%d` 表示整数、`%.1f` 表示保留一位小数、`%n` 表示换行。
 
 ```javascript
 // JS 模板字符串
@@ -709,7 +811,29 @@ String msg = """
 
 ### 7.1 基本语法
 
-💡 **对比 JS**：Java Lambda 和 JS 箭头函数非常相似！
+Lambda 是把“一小段待执行的行为”交给变量或其他方法。语法类似 JS 箭头函数，但 Java 用 `->`，并且需要一个约定参数和返回值的**函数式接口**作为类型。
+
+先看最小例子，顶部导入 `java.util.function.Predicate`，在 `main` 中运行：
+
+```java
+Predicate<Integer> isEven = n -> n % 2 == 0;
+System.out.println(isEven.test(4)); // true
+System.out.println(isEven.test(3)); // false
+```
+
+从右侧看：`n` 是传入的数，`n % 2 == 0` 判断它是不是偶数。从左侧看：`Predicate<Integer>` 约定“接收一个 `Integer`，返回 `boolean`”，`isEven` 是变量名。**赋值只保存行为，调用 `test(4)` 时才执行判断**。这里的 `.test(...)` 是这个接口约定的方法名，不是特殊语法。
+
+下面两种 Lambda 写法表达同一个判断，任选其一：
+
+```java
+Predicate<Integer> isEven = n -> n % 2 == 0;
+// 带大括号时，返回结果要显式写 return
+Predicate<Integer> isEvenWithBlock = n -> {
+    return n % 2 == 0;
+};
+```
+
+再对照几个 JS 写法，先看行为，不必一次记住全部接口名：
 
 ```javascript
 // JS 箭头函数
@@ -719,6 +843,8 @@ const greet = () => console.log("Hello");
 ```
 
 ```java
+// 文件顶部：import java.util.function.BinaryOperator;
+//           import java.util.function.Function;
 // Java Lambda（需要配合函数式接口使用）
 // 形式：(参数) -> 表达式  或  (参数) -> { 代码块; }
 
@@ -726,9 +852,17 @@ const greet = () => console.log("Hello");
 BinaryOperator<Integer> add = (a, b) -> a + b;
 Function<Integer, Integer> double_ = x -> x * 2;
 Runnable greet = () -> System.out.println("Hello");
+
+System.out.println(add.apply(2, 3)); // 5
+System.out.println(double_.apply(4)); // 8
+greet.run(); // Hello
 ```
 
+`Runnable` 的 `run()` 没有参数也没有返回值，所以写 `()`；`Function<Integer, Integer>` 的两个类型分别是输入类型和输出类型。函数式接口只有一个需要实现的抽象方法，Lambda 提供的就是该方法的行为。接口本身会在第二章解释。
+
 ### 7.2 常用函数式接口
+
+以下作为速查。`T`、`U`、`R` 是类型占位名，使用时换成 `String`、`Integer` 等具体引用类型；不是三个必须记住的 Java 类型。
 
 ```java
 import java.util.function.*;
@@ -752,13 +886,21 @@ System.out.println(random.get());
 
 // BiFunction<T, U, R>：接收两个参数
 BiFunction<Integer, Integer, Integer> multiply = (a, b) -> a * b;
-System.out.println(multiply.apply(3, 4));<!-- 这是 01-basics.md 的续写内容，待合并 -->
+System.out.println(multiply.apply(3, 4)); // 12
+```
+
+调用名可以这样记：转换用 `apply`，判断用 `test`，接收并处理用 `accept`，获取一个值用 `get`。`random.get()` 每次调用才生成一个随机数，所以没有固定输出。
 
 ### 7.3 方法引用
+
+**先会写 Lambda，再看这个简写。** 如果 Lambda 只是把参数交给某个现成方法，可以用 `::` 引用那个方法。`System.out::println` 相当于 `name -> System.out.println(name)`，不是现在就打印。
 
 ```java
 import java.util.Arrays;
 import java.util.List;
+import java.util.ArrayList;
+import java.util.function.Function;
+import java.util.function.Supplier;
 
 // 方法引用是 Lambda 的简写形式
 List<String> names = Arrays.asList("Charlie", "Alice", "Bob");
@@ -779,181 +921,208 @@ Function<String, String> greet = prefix::concat;
 System.out.println(greet.apply("Alice"));  // "Hello, Alice"
 
 // 构造器引用
-Supplier<ArrayList> newList = ArrayList::new;
+Supplier<ArrayList<String>> newList = ArrayList::new;
+ArrayList<String> empty = newList.get(); // 此时才执行 new ArrayList<String>()
+System.out.println(empty.size()); // 0
 ```
+
+前两次遍历都会依次打印 `Charlie`、`Alice`、`Bob`。`Integer::parseInt` 表示已有静态方法，`prefix::concat` 表示已有对象的方法，`ArrayList::new` 表示构造器；它们仍需要合适的接口类型来确定参数和返回值。
 
 ---
 
 ## 8. 异常处理 {#exceptions}
 
+异常表示“当前步骤无法按正常方式继续”。例如把 `"abc"` 转成整数失败，就不会凭空返回一个可用的整数，而是抛出异常。
+
 ### 8.1 异常层级结构
 
-```
+先记住常见的 `Exception` 和 `RuntimeException`；层级表用来查名字，不必背下来。
+
+```text
 Throwable
-├── Error（系统级错误，不需要也不应该捕获）
+├── Error（通常表示运行环境等严重问题，普通业务代码一般不捕获）
 │   ├── OutOfMemoryError
 │   └── StackOverflowError
 └── Exception
-    ├── RuntimeException（非受检异常，不强制处理）
+    ├── RuntimeException（非受检异常，编译器不强制声明或捕获）
     │   ├── NullPointerException
     │   ├── ArrayIndexOutOfBoundsException
     │   ├── ClassCastException
-    │   ├── NumberFormatException
     │   └── IllegalArgumentException
-    └── 受检异常（必须处理，否则编译报错）
+    │       └── NumberFormatException
+    └── 其他 Exception 子类通常是受检异常
         ├── IOException
         ├── SQLException
         └── ParseException
 ```
 
+`NumberFormatException` 也是一种 `IllegalArgumentException`。捕获父类异常时，也能捕获对应子类；同一个 `try` 的多个 `catch` 必须把更具体的类型放前面。
+
 ### 8.2 try-catch-finally
 
+把下面的普通语句放进 `main`：
+
 ```java
-// 基本用法
 try {
-    int result = 10 / 0;           // 抛出 ArithmeticException
-    System.out.println(result);
-} catch (ArithmeticException e) {
-    System.out.println("除以零错误: " + e.getMessage());
+    System.out.println("开始转换");
+    int age = Integer.parseInt("abc");
+    System.out.println("年龄是 " + age); // 转换失败，走不到这里
+} catch (NumberFormatException e) {
+    System.out.println("请输入合法整数");
 } finally {
-    System.out.println("finally 总会执行");  // 总是执行
+    System.out.println("本次转换结束");
 }
-
-// 多异常捕获
-try {
-    String s = null;
-    s.length();  // NullPointerException
-} catch (NullPointerException | IllegalArgumentException e) {
-    System.out.println("捕获到: " + e.getClass().getSimpleName());
-} catch (Exception e) {
-    System.out.println("通用异常: " + e.getMessage());
-} finally {
-    System.out.println("清理资源");
-}
+System.out.println("继续执行后面的代码");
 ```
 
-💡 **对比 JS**：`try-catch-finally` 语法和 JS 完全一样！
+输出顺序：
 
-```javascript
-// JS
-try {
-    throw new Error("something went wrong");
-} catch (e) {
-    console.error(e.message);
-} finally {
-    console.log("always runs");
-}
+```text
+开始转换
+请输入合法整数
+本次转换结束
+继续执行后面的代码
 ```
+
+按流程读：`try` 尝试执行；发生异常后跳过其余语句，寻找匹配的 `catch`；变量 `e` 是这次异常对象；最后执行 `finally`。`e.getMessage()` 可读取错误说明，但具体文字可能随 JDK 改变。
+
+`catch` 应处理自己能处理的失败；这里把非法输入转换成提示，是为了演示流程。如果无法处理，应把错误交给调用方，不能捕获后假装成功。`finally` 在正常控制流程中用于清理，但 JVM 被强制终止等情况下不保证执行。
+
+如果多种异常要采用同一种处理方式，可写 `catch (IOException | SQLException e)`；这只是语法示意，需要对应的导入，而且 `try` 中必须确实有可能抛出这些受检异常。
 
 ### 8.3 受检异常 vs 非受检异常
 
-这是 Java 独有的概念，JS/TS 没有！
+差别是**编译器是否要求你交代处理方式**，不是“一个严重、一个不严重”。
+
+| 类型 | 编译器的要求 | 常见处理 |
+|------|--------------|----------|
+| 受检异常，如 `IOException` | 调用方必须捕获，或者方法用 `throws` 继续声明 | 文件不存在时提示，或交由上层决定 |
+| 非受检异常，如 `IllegalArgumentException` | 不强制捕获或声明 | 参数不合法时拒绝操作，定位并修正调用问题 |
+
+下面的方法放进 `Main` 类中、`main` 外；顶部导入 `java.io.IOException`、`java.nio.file.Files` 和 `java.nio.file.Path`：
 
 ```java
-import java.io.*;
-
-// 受检异常（Checked Exception）：必须处理，否则编译不通过
-public void readFile(String path) throws IOException {  // 声明可能抛出
-    FileReader reader = new FileReader(path);  // 编译器强制你处理
-    // ...
-}
-
-// 调用时必须处理
-try {
-    readFile("/path/to/file.txt");
-} catch (IOException e) {
-    System.err.println("文件读取失败: " + e.getMessage());
-}
-
-// 或者继续往上抛
-public void doSomething() throws IOException {
-    readFile("/path/to/file.txt");
+public static String readFile(String path) throws IOException {
+    return Files.readString(Path.of(path));
 }
 ```
 
+读法：方法名 `readFile`，接收路径字符串，返回文件内容字符串；`throws IOException` 告诉调用方“读取可能失败，需要处理”。它**不会立即抛异常**，实际失败时才会抛出。
+
+在 `Main.java` 所在目录创建 `hello.txt`，写入 `Hello Java`，然后从同一目录运行程序。在 `main` 中调用：
+
 ```java
-// 非受检异常（RuntimeException）：不需要显式捕获
-public int divide(int a, int b) {
+try {
+    String content = readFile("hello.txt");
+    System.out.println(content); // 文件内容：Hello Java
+} catch (IOException e) {
+    System.err.println("读取失败: " + e.getMessage());
+}
+```
+
+如果文件不存在，则进入 `catch`，不打印正常结果。`System.err` 是错误输出流。也可以让上层继续处理：
+
+```java
+// 放在类中、main 外面；调用 readAndPrint 的代码也需要处理 IOException
+public static void readAndPrint() throws IOException {
+    System.out.println(readFile("hello.txt"));
+}
+```
+
+再看非受检异常，下面的方法同样放在类中：
+
+```java
+public static int divide(int a, int b) {
     if (b == 0) {
         throw new IllegalArgumentException("除数不能为零");
     }
     return a / b;
 }
-
-// 调用时不强制 try-catch
-int result = divide(10, 0);  // 运行时抛出，不捕获程序就崩溃
 ```
+
+`throw new ...` 创建并**实际抛出**异常，后面的 `return` 不再执行。`divide(10, 2)` 返回 `5`；`divide(10, 0)` 会抛出异常。若在 `main` 中不捕获，该异常会结束这次主线程执行，并输出错误堆栈。
 
 ### 8.4 自定义异常
 
+当现成的异常类型不足以表达业务含义，可以定义自己的异常。保存为 `UserNotFoundException.java`，与 `Main.java` 放在同一目录：
+
 ```java
-// 自定义异常（继承 RuntimeException）
 public class UserNotFoundException extends RuntimeException {
     private final Long userId;
-    
+
     public UserNotFoundException(Long userId) {
         super("User not found: " + userId);
         this.userId = userId;
     }
-    
+
     public Long getUserId() {
         return userId;
     }
 }
+```
 
-// 使用
-public User findUser(Long id) {
-    User user = userRepository.findById(id);
-    if (user == null) {
-        throw new UserNotFoundException(id);
+先只看三件事：`extends RuntimeException` 表示它是一种非受检异常；`super(...)` 将错误说明交给父类构造器；字段 `userId` 保存额外信息。类、继承和 `this` 的细节在第二章讲解。
+
+在 `Main` 中加入这个方法，模拟只存在用户 1，不需要数据库：
+
+```java
+public static String findUserName(long id) {
+    if (id == 1L) {
+        return "Alice";
     }
-    return user;
+    throw new UserNotFoundException(id);
 }
+```
 
-// 捕获
+再在 `main` 中调用：
+
+```java
 try {
-    User user = findUser(999L);
+    System.out.println(findUserName(999L));
 } catch (UserNotFoundException e) {
     System.out.println("用户 " + e.getUserId() + " 不存在");
 }
 ```
 
+在文件所在目录执行 `javac Main.java UserNotFoundException.java`、`java Main`，输出 `用户 999 不存在`。这里方法返回的是用户名，因此没有依赖尚未定义的 `User` 或 `userRepository`。
+
 ### 8.5 try-with-resources（自动关闭资源）
 
-```java
-// ❌ 老写法：手动关闭，容易忘
-FileReader fr = null;
-try {
-    fr = new FileReader("file.txt");
-    // 读取...
-} catch (IOException e) {
-    e.printStackTrace();
-} finally {
-    if (fr != null) {
-        try {
-            fr.close();
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
-    }
-}
+文件、连接等资源用完后需要关闭，垃圾回收并不能代替及时释放它们。把支持 `AutoCloseable` 的资源写在 `try (...)` 中，退出这个代码块时会按声明的逆序关闭资源，包括中途抛异常的情况。
 
-// ✅ 推荐：try-with-resources，自动关闭
-try (FileReader fr = new FileReader("file.txt");
-     BufferedReader br = new BufferedReader(fr)) {
+下面是普通语句。顶部导入 `java.io.BufferedReader`、`java.io.IOException`、`java.nio.file.Files`、`java.nio.file.Path`；沿用前面的 `hello.txt`：
+
+```java
+try (BufferedReader reader = Files.newBufferedReader(Path.of("hello.txt"))) {
     String line;
-    while ((line = br.readLine()) != null) {
+    while ((line = reader.readLine()) != null) {
         System.out.println(line);
     }
 } catch (IOException e) {
     System.err.println("读取失败: " + e.getMessage());
 }
-// 无论是否异常，fr 和 br 都会被自动关闭
 ```
 
-💡 **对比 JS**：JS 中没有这个概念（JS 的 GC 处理内存，但流/连接仍需手动关闭）。Java 的 `try-with-resources` 是优雅处理资源的最佳实践。
+把 `while` 的条件拆开看：`readLine()` 读取一行；`line = ...` 保存读到的内容；`!= null` 判断是否到文件末尾。每轮打印一行；没有更多内容时结束循环，随后自动关闭 `reader`。不必再手写一层 `finally` 调用 `close()`。
 
 ---
+
+## 自测：先猜，再运行
+
+1. `System.out.println(5 / 2);` 与 `System.out.println(5.0 / 2);` 各输出什么？
+2. `String name = "alice"; name.toUpperCase();` 执行后，`name` 是什么？
+3. `Predicate<Integer> isEven = n -> n % 2 == 0;` 这一行是否已经判断过某个具体数字？
+4. `throw` 与 `throws` 有什么区别？
+
+<details>
+<summary>查看答案</summary>
+
+1. 分别是 `2` 与 `2.5`，第一个进行整数除法。
+2. 仍是 `"alice"`。要保存新值，需要 `name = name.toUpperCase();`。
+3. 没有，它只是定义行为；调用 `isEven.test(4)` 时才判断 `4`。
+4. `throw` 实际抛出一个异常对象；方法签名中的 `throws` 声明可能向外抛出的异常类型。
+
+</details>
 
 ## 总结对比表
 
@@ -961,7 +1130,7 @@ try (FileReader fr = new FileReader("file.txt");
 |------|----------------------|------|
 | 类型检查 | 编译期（TS）/ 运行时（JS） | 编译期 |
 | 数字类型 | `number`（64位浮点） | `int`/`long`/`double` 等 |
-| 字符串 | `string`，可变内容（实际不可变） | `String`，不可变 |
+| 字符串 | `string`，不可变 | `String`，不可变 |
 | 字符串比较 | `===` | `.equals()` |
 | 空值 | `null` / `undefined` | `null` |
 | 常量 | `const` | `final` |

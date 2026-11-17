@@ -1,6 +1,14 @@
 # 实战项目与进阶路线
 
-> 动手做项目是学习 Java 最快的方式
+> 先做出能请求、能返回的小接口，再逐步加入数据库、登录和业务规则。
+
+**本章目标**：能解释“浏览器发请求 → Controller 接收 → Service 处理 → Repository 读写 → 返回 JSON”这条链路。
+
+- **第一次学必做**：内存版文章 CRUD、一次前后端请求、能区分 400 / 401 / 403 / 404。
+- **第二轮再做**：数据库、DTO、作者权限和事务。
+- **以后按需看**：评论、标签、缓存、微服务、性能工具和面试题。
+
+运行环境沿用上一章的 **JDK 21 + Spring Boot 3.x + Maven**。本章只有“内存版文章 CRUD”给出了完整业务文件；后面的博客代码用于读懂分层，省略的类和配置会单独说明，不能直接拼成一个完整项目。
 
 ## 目录
 
@@ -14,6 +22,144 @@
 
 ## 博客系统后端实战
 
+### 先完成一个内存版文章 CRUD
+
+先不连接 MySQL，也不加登录。沿用上一章只添加 **Spring Web** 的最小项目：启动类放在 `com.example.demo` 包，让 Spring 能扫描到下面的子包。若已经添加 JPA 或 Security，需要先使用独立的最小练习项目，否则会额外要求数据库或登录配置。
+
+创建 `src/main/java/com/example/demo/practice/ArticlePracticeController.java`。下面是整个文件，不是写进 `main()` 的语句：
+
+```java
+package com.example.demo.practice;
+
+import java.util.Comparator;
+import java.util.List;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicLong;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.bind.annotation.*;
+import org.springframework.web.server.ResponseStatusException;
+
+@RestController
+@RequestMapping("/practice/articles")
+public class ArticlePracticeController {
+    // 暂时用 Map 代替数据库：key 是文章 ID，value 是文章内容。
+    private final ConcurrentHashMap<Long, Article> articles = new ConcurrentHashMap<>();
+    private final AtomicLong nextId = new AtomicLong(0);
+
+    // record 自动提供 id() / title() / content()，用于传输数据。
+    public record Article(long id, String title, String content) {}
+    public record WriteArticleRequest(String title, String content) {}
+
+    @PostMapping
+    @ResponseStatus(HttpStatus.CREATED)
+    public Article create(@RequestBody WriteArticleRequest request) {
+        checkRequest(request);
+        long id = nextId.incrementAndGet();
+        Article article = new Article(id, request.title(), request.content());
+        articles.put(id, article);
+        return article;
+    }
+
+    @GetMapping
+    public List<Article> list() {
+        return articles.values().stream()
+            .sorted(Comparator.comparingLong(Article::id))
+            .toList();
+    }
+
+    @GetMapping("/{id}")
+    public Article get(@PathVariable("id") long id) {
+        Article article = articles.get(id);
+        if (article == null) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "文章不存在");
+        }
+        return article;
+    }
+
+    @PutMapping("/{id}")
+    public Article update(@PathVariable("id") long id,
+                          @RequestBody WriteArticleRequest request) {
+        checkRequest(request);
+        Article updated = articles.computeIfPresent(id, (key, oldArticle) ->
+            new Article(key, request.title(), request.content()));
+        if (updated == null) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "文章不存在");
+        }
+        return updated;
+    }
+
+    @DeleteMapping("/{id}")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void delete(@PathVariable("id") long id) {
+        if (articles.remove(id) == null) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "文章不存在");
+        }
+    }
+
+    private void checkRequest(WriteArticleRequest request) {
+        if (request.title() == null || request.title().isBlank()
+                || request.content() == null || request.content().isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "标题和正文不能为空");
+        }
+    }
+}
+```
+
+按下面顺序读，不需要一次记住所有注解：
+
+1. `@RequestMapping` 指定共同路径，`@PostMapping` 等决定 HTTP 方法。
+2. `@RequestBody` 把 JSON 转成 `WriteArticleRequest`；`@PathVariable("id")` 从 URL 取 ID。
+3. `new Article(...)` 只是创建 Java 对象；`articles.put(id, article)` 才把它保存进 Map。
+4. 方法返回对象后，Spring Web 把对象转成 JSON。`@ResponseStatus` 决定 HTTP 状态，返回 `void` 的删除接口没有响应体。
+5. `computeIfPresent` 只在 ID 已存在时替换该条目，`(key, oldArticle) -> ...` 是交给 Map 执行的函数；返回 `null` 在这里表示没有找到条目。
+
+这里使用并发 Map 和原子 ID，是因为多个 HTTP 请求可能同时进入同一个 Controller。它们保证单次 Map 操作和 ID 生成安全，不代表多个步骤自动构成事务。列表也不是某一时刻的严格快照。练习数据保存在当前进程，**重启就丢失**；这正是下一步要引入数据库的原因。
+
+在项目根目录启动：
+
+```bash
+./mvnw spring-boot:run
+```
+
+另开终端，按顺序请求；`-i` 用来同时查看状态码和响应体：
+
+```bash
+# 1. 创建：新启动且没有数据时，返回 201，ID 为 1。
+curl -i -X POST http://localhost:8080/practice/articles \
+  -H 'Content-Type: application/json' \
+  -d '{"title":"第一篇文章","content":"你好 Java"}'
+# 响应体：{"id":1,"title":"第一篇文章","content":"你好 Java"}
+
+# 2. 列表：返回 200，数组中有刚才的文章。
+curl -i http://localhost:8080/practice/articles
+
+# 3. 修改：返回 200，title 变为“修改后的标题”。
+curl -i -X PUT http://localhost:8080/practice/articles/1 \
+  -H 'Content-Type: application/json' \
+  -d '{"title":"修改后的标题","content":"你好 Java"}'
+
+# 4. 删除：返回 204，没有响应体。
+curl -i -X DELETE http://localhost:8080/practice/articles/1
+
+# 5. 再查询：返回 404。
+curl -i http://localhost:8080/practice/articles/1
+```
+
+**这一阶段通过的标准**：不看代码，也能说出五次请求分别调用哪个方法、Map 怎样变化、返回什么状态。这个练习直接返回文章 JSON；后面的正式 API 才使用上一章的 `ApiResponse<T>` 包装，二者不要混着解析。
+
+### 分阶段扩展
+
+| 阶段 | 这一步只解决什么 | 完成后检查什么 |
+|------|----------------|----------------|
+| 1. 内存 CRUD | HTTP、JSON 和 Java 对象互转 | 上面的五次请求全部符合预期 |
+| 2. 拆 Service | Controller 只接收请求，业务规则移到 Service | URL 和响应不变，能沿构造器找到依赖 |
+| 3. 接 MySQL / JPA | 把 Map 换成 Repository，数据持久保存 | 重启应用后文章仍能查到；不存在仍是 404 |
+| 4. 加 DTO / 校验 | 明确哪些字段能传入、哪些字段能返回 | 空标题是 400；响应不含密码和多余关联 |
+| 5. 加登录 / 权限 | 确定当前用户是谁，是否为作者 | 未登录 401；其他作者修改 403；本人成功 |
+| 6. 加标签 / 评论 | 学会关联查询和业务规则 | 无效标签被拒绝；草稿不出现在公开列表 |
+
+下面先展示最终目标和数据库版的核心结构。第一次阅读停在能理解 Entity / Repository / Service / DTO 的职责即可，不必同时实现表格里的全部功能。
+
 ### 需求分析
 
 | 模块 | 功能 |
@@ -25,11 +171,19 @@
 
 ### 数据库设计
 
+这是 **MySQL 8 的目标结构**，应在专用练习数据库中使用，尚未由上面的内存示例创建。`users.name` 沿用上一章的 `User.name`；`password` 存密码哈希，不存明文。只做文章阶段时先理解 `users` 和 `articles` 两张表。
+
+- `PRIMARY KEY`：每行的唯一 ID；`AUTO_INCREMENT`：让数据库生成 ID。
+- `NOT NULL`：必须有值；`DEFAULT`：未提供时使用的值。
+- `articles.user_id → users.id`：文章通过作者 ID 关联用户，不把整个用户对象塞进一个列。
+- `article_tags`：一篇文章可有多个标签，一个标签也可用于多篇文章，因此需要中间表。
+- `ON DELETE CASCADE`：删除主记录时一并删除关联行；它不会替你完成“当前用户是否有权删除”的检查。
+
 ```sql
 -- 用户表
 CREATE TABLE users (
     id          BIGINT PRIMARY KEY AUTO_INCREMENT,
-    username    VARCHAR(50)  UNIQUE NOT NULL,
+    name        VARCHAR(50)  NOT NULL,
     email       VARCHAR(100) UNIQUE NOT NULL,
     password    VARCHAR(100) NOT NULL,
     avatar      VARCHAR(255),
@@ -87,6 +241,10 @@ CREATE TABLE comments (
 
 ### API 设计
 
+这是计划实现的接口清单，不代表下面已经提供全部实现。公开文章接口只应返回 `PUBLISHED` 状态；修改和删除除了认证，还必须校验作者。登录成功后，服务端从认证上下文取当前用户 ID，不能信任客户端随意传来的 `authorId`。
+
+第五章的 Security 示例默认要求其他接口登录、用户管理接口为管理员；扩展到这张表时，要同步为公开的文章 GET 请求、`/api/users/me` 等设置更具体的规则，并放在较宽泛的规则之前，接口表本身不会改变访问权限。
+
 | 方法 | 路径 | 说明 | 认证 |
 |------|------|------|------|
 | POST | `/api/auth/register` | 注册 | ❌ |
@@ -106,12 +264,25 @@ CREATE TABLE comments (
 
 ### 核心代码：Article 模块
 
+以下是**数据库版分层片段**，使用 `/api/articles`；前面的内存练习使用 `/practice/articles`，请求时注意对应路径。每个 `public` 类型分别放在同名 `.java` 文件中，按第五章的 `entity` / `repository` / `service` / `dto` 分包，并补相应 `package` / `import`。
+
+| 片段依赖 | 本章提供到什么程度 |
+|----------|------------------|
+| Spring Data JPA、Validation、MySQL Driver、Lombok | 在第五章相应章节逐项添加；最初的 `/hello` 项目只有 Spring Web，此处未提供完整 `pom.xml` |
+| `User` / `UserRepository` | 沿用第五章，用户名字段为 `name` |
+| `Tag` / `TagRepository` | 需自行定义 `id`、`name` 、JPA 实体映射，以及继承 `JpaRepository<Tag, Long>` 的接口 |
+| `BusinessException` / `ResourceNotFoundException` | 沿用第五章，并确保映射为对应 HTTP 状态 |
+| `ArticleController`、登录、分页参数校验 | 本章未提供完整实现；需要接到 Service，不能只粘贴下面几段就请求成功 |
+| 时间审计、数据库连接 | 启用 `@EnableJpaAuditing` 并配置数据源 |
+
 #### Entity
+
+Entity 描述“数据库的一行怎样对应 Java 对象”。先只看 `id` / `title` / `author`，其余字段是逐步扩展的。JPA 注解来自 `jakarta.persistence`，审计注解来自 Spring Data；这里使用 Lombok 生成 Getter / Setter。
 
 ```java
 @Entity
 @Table(name = "articles")
-@Data @Builder @NoArgsConstructor @AllArgsConstructor
+@Getter @Setter @NoArgsConstructor
 @EntityListeners(AuditingEntityListener.class)
 public class Article {
 
@@ -130,11 +301,9 @@ public class Article {
     private String coverImage;
 
     @Enumerated(EnumType.STRING)
-    @Builder.Default
     private ArticleStatus status = ArticleStatus.DRAFT;
 
     @Column(nullable = false)
-    @Builder.Default
     private Integer viewCount = 0;
 
     @ManyToOne(fetch = FetchType.LAZY)
@@ -147,7 +316,6 @@ public class Article {
         joinColumns = @JoinColumn(name = "article_id"),
         inverseJoinColumns = @JoinColumn(name = "tag_id")
     )
-    @Builder.Default
     private Set<Tag> tags = new HashSet<>();
 
     @CreatedDate @Column(updatable = false)
@@ -158,7 +326,13 @@ public class Article {
 }
 ```
 
+读关联时可以把它翻译成：`author` 是一个 `User` 对象，但 `@JoinColumn(name = "user_id")` 告诉 JPA，只把作者 ID 存在 `articles.user_id` 中。`LAZY` 表示按需加载，不保证读取时一定只有一条 SQL。这里不直接返回 Entity，也不使用 `@Data` 自动遍历关联生成 `toString` / `equals`，减少循环引用和额外查询。
+
+状态枚举单独定义为 `public enum ArticleStatus { DRAFT, PUBLISHED }`。`@Enumerated(EnumType.STRING)` 把它保存成 `DRAFT` / `PUBLISHED`，而不是枚举序号。
+
 #### Repository
+
+Repository 负责查询，不负责判断“某人有没有权限修改文章”。`JpaRepository<Article, Long>` 中前一个类型是实体，后一个是主键类型。先理解第一个方法名：按 `status` 筛选，再按 `createdAt` 倒序；返回的 `Page<Article>` 包含这一页数据和分页信息。
 
 ```java
 @Repository
@@ -168,25 +342,26 @@ public interface ArticleRepository extends JpaRepository<Article, Long> {
     Page<Article> findByStatusOrderByCreatedAtDesc(ArticleStatus status, Pageable pageable);
 
     // 按标签查询
-    @Query("SELECT DISTINCT a FROM Article a JOIN a.tags t WHERE t.id = :tagId AND a.status = 'PUBLISHED'")
-    Page<Article> findByTagId(@Param("tagId") Long tagId, Pageable pageable);
+    @Query("SELECT DISTINCT a FROM Article a JOIN a.tags t WHERE t.id = :tagId AND a.status = :status")
+    Page<Article> findByTagId(@Param("tagId") Long tagId,
+                              @Param("status") ArticleStatus status, Pageable pageable);
 
     // 关键词搜索
-    @Query("SELECT a FROM Article a WHERE a.status = 'PUBLISHED' AND " +
+    @Query("SELECT a FROM Article a WHERE a.status = :status AND " +
            "(a.title LIKE %:kw% OR a.summary LIKE %:kw%)")
-    Page<Article> search(@Param("kw") String keyword, Pageable pageable);
+    Page<Article> search(@Param("kw") String keyword,
+                         @Param("status") ArticleStatus status, Pageable pageable);
 
     // 某用户的文章
     Page<Article> findByAuthorIdAndStatus(Long authorId, ArticleStatus status, Pageable pageable);
-
-    // 增加浏览量（原子操作）
-    @Modifying
-    @Query("UPDATE Article a SET a.viewCount = a.viewCount + 1 WHERE a.id = :id")
-    void incrementViewCount(@Param("id") Long id);
 }
 ```
 
+`@Query` 这里写的是 JPQL：`Article` / `tags` / `status` 是 Java 实体和字段名，不是 SQL 表名。`:status` 通过参数传入枚举，避免把枚举与字符串字面量混比。`Pageable` 决定查第几页、每页几条；Spring Data 的页码从 **0** 开始。
+
 #### Service
+
+下面的业务顺序是：列表先选查询条件；详情先确认已发布；创建先找作者和标签再保存；更新先确认作者再改字段。传入的 `authorId` / `currentUserId` 必须来自服务端认证结果。`@Transactional` 为同一次业务调用建立事务，不能自动覆盖另一个线程里的代码。
 
 ```java
 @Service
@@ -200,13 +375,13 @@ public class ArticleService {
 
     @Transactional(readOnly = true)
     public Page<ArticleDTO> list(int page, int size, Long tagId, String keyword) {
-        Pageable pageable = PageRequest.of(page, size);
+        Pageable pageable = PageRequest.of(page, size, Sort.by("createdAt").descending());
 
         Page<Article> articles;
         if (tagId != null) {
-            articles = articleRepository.findByTagId(tagId, pageable);
+            articles = articleRepository.findByTagId(tagId, ArticleStatus.PUBLISHED, pageable);
         } else if (keyword != null && !keyword.isBlank()) {
-            articles = articleRepository.search(keyword, pageable);
+            articles = articleRepository.search(keyword, ArticleStatus.PUBLISHED, pageable);
         } else {
             articles = articleRepository.findByStatusOrderByCreatedAtDesc(ArticleStatus.PUBLISHED, pageable);
         }
@@ -222,33 +397,32 @@ public class ArticleService {
             throw new ResourceNotFoundException("文章不存在");
         }
 
-        // 异步增加浏览量（避免影响读取性能）
-        CompletableFuture.runAsync(() -> articleRepository.incrementViewCount(id));
-
         return ArticleDetailDTO.fromEntity(article);
     }
 
     @Transactional
     public ArticleDTO create(CreateArticleRequest req, Long authorId) {
-        User author = userRepository.findById(authorId).orElseThrow();
+        User author = userRepository.findById(authorId)
+            .orElseThrow(() -> new ResourceNotFoundException("作者不存在"));
 
         Set<Tag> tags = new HashSet<>();
-        if (req.getTagIds() != null && !req.getTagIds().isEmpty()) {
-            tags = new HashSet<>(tagRepository.findAllById(req.getTagIds()));
+        if (req.tagIds() != null && !req.tagIds().isEmpty()) {
+            tags = new HashSet<>(tagRepository.findAllById(req.tagIds()));
+            if (tags.size() != req.tagIds().size()) {
+                throw new BusinessException(400, "存在无效标签");
+            }
         }
 
-        Article article = Article.builder()
-            .title(req.getTitle())
-            .content(req.getContent())
-            .summary(req.getSummary())
-            .coverImage(req.getCoverImage())
-            .status(req.isDraft() ? ArticleStatus.DRAFT : ArticleStatus.PUBLISHED)
-            .author(author)
-            .tags(tags)
-            .build();
+        Article article = new Article();
+        article.setTitle(req.title());
+        article.setContent(req.content());
+        article.setSummary(req.summary());
+        article.setStatus(req.draft() ? ArticleStatus.DRAFT : ArticleStatus.PUBLISHED);
+        article.setAuthor(author);
+        article.setTags(tags);
 
         article = articleRepository.save(article);
-        log.info("文章发布成功: id={}, title={}", article.getId(), article.getTitle());
+        log.info("文章发布成功: id={}", article.getId());
         return ArticleDTO.fromEntity(article);
     }
 
@@ -262,53 +436,72 @@ public class ArticleService {
             throw new BusinessException(403, "无权限修改此文章");
         }
 
-        article.setTitle(req.getTitle());
-        article.setContent(req.getContent());
-        article.setSummary(req.getSummary());
+        article.setTitle(req.title());
+        article.setContent(req.content());
+        article.setSummary(req.summary());
 
         return ArticleDTO.fromEntity(articleRepository.save(article));
     }
 }
 ```
 
+读完后用一次具体请求串起来：`POST /api/articles` 带标题和正文 → Controller 校验请求并获取当前用户 ID → `create(req, authorId)` 查作者和标签 → `save(article)` 插入文章 → `fromEntity` 选取响应字段 → Spring 转成 JSON。`save` 不会检查用户权限，权限检查仍由业务代码负责。
+
+这里的筛选规则是“有 `tagId` 就按标签，否则按关键词”，没有实现二者同时筛选。`getById` 也没有实现浏览量累加；不要在只读事务里随手 `runAsync()` 写数据库：原事务不会跟随到异步线程，失败也不会自动反馈给当前请求。浏览量需求应独立设计计数、事务和失败处理后再接入。
+
 #### DTO
 
-```java
-// 列表 DTO（不包含全文内容，减少传输量）
-@Data @Builder
-public class ArticleDTO {
-    private Long id;
-    private String title;
-    private String summary;
-    private String coverImage;
-    private String status;
-    private Integer viewCount;
-    private AuthorDTO author;
-    private List<TagDTO> tags;
-    private LocalDateTime createdAt;
+DTO 是接口的数据结构。Entity 可能带密码、懒加载关系和数据库细节，不能直接当作所有接口的返回体。这里用 `record` 把“返回哪些字段”写清楚；每个 `public record` 单独一个文件，`fromEntity` 是我们自己写的转换方法，不是 Spring 自动提供的。
 
+```java
+// dto/ArticleDTO.java：列表只返回摘要，不带正文。
+public record ArticleDTO(Long id, String title, String summary,
+                         String status, String authorName, List<String> tags) {
     public static ArticleDTO fromEntity(Article article) {
-        return ArticleDTO.builder()
-            .id(article.getId())
-            .title(article.getTitle())
-            .summary(article.getSummary())
-            .coverImage(article.getCoverImage())
-            .status(article.getStatus().name())
-            .viewCount(article.getViewCount())
-            .author(AuthorDTO.fromEntity(article.getAuthor()))
-            .tags(article.getTags().stream().map(TagDTO::fromEntity).toList())
-            .createdAt(article.getCreatedAt())
-            .build();
+        List<String> tagNames = article.getTags().stream()
+            .map(Tag::getName)
+            .sorted()
+            .toList();
+        return new ArticleDTO(article.getId(), article.getTitle(), article.getSummary(),
+            article.getStatus().name(), article.getAuthor().getName(), tagNames);
     }
 }
+```
 
-// 详情 DTO（包含全文）
-@Data @Builder
-public class ArticleDetailDTO extends ArticleDTO {
-    private String content;
-    // ...
+`Tag::getName` 相当于 `tag -> tag.getName()`；先从标签对象提取名字，再排序、收成列表。`article.getStatus().name()` 把枚举转成字符串，例如 `PUBLISHED`。映射作者和标签时可能触发 SQL，所以示例在 Service 事务内完成 DTO 转换；列表场景还要按实际 SQL 检查 N+1，不能只看 Java 代码就认为查库一次。
+
+```java
+// dto/ArticleDetailDTO.java：用组合复用列表信息，另外增加正文。
+public record ArticleDetailDTO(ArticleDTO article, String content) {
+    public static ArticleDetailDTO fromEntity(Article article) {
+        return new ArticleDetailDTO(ArticleDTO.fromEntity(article), article.getContent());
+    }
 }
 ```
+
+详情结果形如 `{"article":{"id":1,"title":"第一篇文章",...},"content":"你好 Java"}`。这里的 `...` 只是说明省略字段，不是实际 JSON。选择组合以后，前端通过 `detail.article.title` 取标题，不能继续假设它在 `detail.title`。
+
+请求类型也要明确。下面是 Service 使用的两个类型，需添加 `jakarta.validation.constraints` 的导入，并在 Controller 入参上用 `@Valid` 触发：
+
+```java
+// dto/CreateArticleRequest.java
+public record CreateArticleRequest(
+    @NotBlank @Size(max = 200) String title,
+    @NotBlank String content,
+    @Size(max = 500) String summary,
+    boolean draft,
+    Set<Long> tagIds
+) {}
+
+// dto/UpdateArticleRequest.java：本例更新标题、正文和摘要。
+public record UpdateArticleRequest(
+    @NotBlank @Size(max = 200) String title,
+    @NotBlank String content,
+    @Size(max = 500) String summary
+) {}
+```
+
+创建请求例如 `{"title":"第一篇文章","content":"你好 Java","draft":true,"tagIds":[]}`，其结果是保存草稿，公开列表不应出现它。这里未实现发布已有草稿、修改标签、删除文章和评论；按前面的分阶段表逐项补，不要把缺失部分当作已经完成。
 
 ---
 
@@ -316,91 +509,115 @@ public class ArticleDetailDTO extends ArticleDTO {
 
 ### CORS 配置
 
+先用 `curl` 确认接口本身成功，再接浏览器。前端 `localhost:3000` 请求后端 `localhost:8080` 属于跨源请求，浏览器会检查后端是否允许它。CORS 解决浏览器访问许可，不代替登录或作者权限。
+
+下面是完整配置文件，保存为 `src/main/java/com/example/demo/config/CorsConfig.java`。若已启用 Spring Security，还要在它的 `SecurityFilterChain` 中启用 `.cors(Customizer.withDefaults())`，让安全链使用 Spring MVC 的跨源配置（`Customizer` 来自 `org.springframework.security.config`）。
+
 ```java
+package com.example.demo.config;
+
+import org.springframework.context.annotation.Configuration;
+import org.springframework.web.servlet.config.annotation.CorsRegistry;
+import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
+
 @Configuration
-public class CorsConfig {
-
-    @Bean
-    public CorsConfigurationSource corsConfigurationSource() {
-        CorsConfiguration config = new CorsConfiguration();
-        config.setAllowedOrigins(Arrays.asList("http://localhost:3000", "https://yourdomain.com"));
-        config.setAllowedMethods(Arrays.asList("GET", "POST", "PUT", "DELETE", "OPTIONS"));
-        config.setAllowedHeaders(Arrays.asList("*"));
-        config.setAllowCredentials(true);
-        config.setMaxAge(3600L);
-
-        UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
-        source.registerCorsConfiguration("/api/**", config);
-        return source;
+public class CorsConfig implements WebMvcConfigurer {
+    @Override
+    public void addCorsMappings(CorsRegistry registry) {
+        registry.addMapping("/api/**")
+            .allowedOrigins("http://localhost:3000")
+            .allowedMethods("GET", "POST", "PUT", "DELETE", "OPTIONS")
+            .allowedHeaders("Content-Type", "Authorization")
+            .allowCredentials(false) // 本例只通过 Authorization 请求头传 Token
+            .maxAge(3600L);
     }
 }
 ```
 
+`allowedOrigins` 对应浏览器地址栏里的前端来源；`allowedMethods` / `allowedHeaders` 对应请求方式和请求头。`maxAge(3600L)` 的单位是秒，表示预检结果可缓存多久。这里只配置 `/api/**`；若先联调内存练习，把映射改为 `/practice/**`，或为它再增加一条相同规则。若改用 Cookie 登录，需要重新设计凭据、CSRF 和允许来源，不能只改一个布尔值。
+
 ### 前端 Axios 封装
+
+这是 **Vite + TypeScript + Axios** 项目的片段，后端应按第五章返回 `ApiResponse<T>`。先理解一条链：`articleApi.getById(1)` 发请求 → Axios 附加 Token → 后端返回 `{"code":200,"message":"success","data":...}` → API 函数取 `response.data.data`。
+
+下面保留 Axios 的正常响应类型，在 API 函数里明确解包，避免拦截器改成返回业务对象后，TypeScript 还误以为它是 `AxiosResponse`。
 
 ```typescript
 // src/api/request.ts
-import axios, { AxiosError, AxiosResponse } from 'axios'
-import { useAuthStore } from '@/stores/auth'
+import axios, { AxiosError } from 'axios'
 
-const request = axios.create({
+export const request = axios.create({
   baseURL: import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080',
   timeout: 10000,
-  headers: { 'Content-Type': 'application/json' },
 })
 
-// 请求拦截器：自动附加 JWT
 request.interceptors.request.use(config => {
   const token = localStorage.getItem('token')
   if (token) config.headers.Authorization = `Bearer ${token}`
   return config
 })
 
-// 响应拦截器：统一处理错误
 request.interceptors.response.use(
-  (res: AxiosResponse) => res.data.data,  // 直接返回 data 字段
-  (err: AxiosError<{ code: number; message: string }>) => {
-    const status = err.response?.status
-    const message = err.response?.data?.message || '请求失败'
-
-    if (status === 401) {
+  response => response,
+  (error: AxiosError<{ message?: string }>) => {
+    if (error.response?.status === 401) {
       localStorage.removeItem('token')
-      window.location.href = '/login'
-    } else if (status === 403) {
-      console.error('无权限')
-    } else {
-      console.error(message)
+      // 页面可在接收到错误后引导用户重新登录。
     }
-    return Promise.reject(err)
-  }
+    return Promise.reject(error) // 让调用方知道失败，不能吞成成功结果。
+  },
 )
 
-export default request
+// src/api/article.ts：这些响应类型与上面的 Java record 对应。
+import { request } from './request'
 
-// src/api/article.ts
-import request from './request'
+type ApiResponse<T> = { code: number; message: string; data: T }
+type Article = {
+  id: number
+  title: string
+  summary: string | null
+  status: string
+  authorName: string
+  tags: string[]
+}
+type ArticleDetail = { article: Article; content: string }
+type CreateArticleRequest = {
+  title: string
+  content: string
+  summary?: string
+  draft: boolean
+  tagIds?: number[]
+}
+type UpdateArticleRequest = Pick<CreateArticleRequest, 'title' | 'content' | 'summary'>
 
 export const articleApi = {
-  list: (params: { page?: number; size?: number; tagId?: number; keyword?: string }) =>
-    request.get('/api/articles', { params }),
-
-  getById: (id: number) =>
-    request.get(`/api/articles/${id}`),
-
-  create: (data: CreateArticleRequest) =>
-    request.post('/api/articles', data),
-
-  update: (id: number, data: UpdateArticleRequest) =>
-    request.put(`/api/articles/${id}`, data),
-
-  delete: (id: number) =>
-    request.delete(`/api/articles/${id}`),
+  async getById(id: number): Promise<ArticleDetail> {
+    const response = await request.get<ApiResponse<ArticleDetail>>(`/api/articles/${id}`)
+    return response.data.data
+  },
+  async create(data: CreateArticleRequest): Promise<Article> {
+    const response = await request.post<ApiResponse<Article>>('/api/articles', data)
+    return response.data.data
+  },
+  async update(id: number, data: UpdateArticleRequest): Promise<Article> {
+    const response = await request.put<ApiResponse<Article>>(`/api/articles/${id}`, data)
+    return response.data.data
+  },
+  async delete(id: number): Promise<void> {
+    await request.delete(`/api/articles/${id}`) // 204 没有 data，不能继续解包。
+  },
 }
 ```
+
+调用方用 `try/catch` 显示失败信息；HTTP 401 表示需要认证，403 表示身份已确认但没有权限，404 表示资源不存在，400 表示输入不符合要求。`timeout: 10000` 是客户端等待阈值，超时不证明服务端没执行，创建失败后不要不查状态就连续重试。
+
+本例在练习中用 `number` 表示小 ID。Java `long` 的范围大于 JavaScript 安全整数范围；正式 API 若可能返回大 ID，应约定字符串序列化并把 TypeScript 类型改成 `string`。Token 存储方式也只是演示，`localStorage` 可被页面脚本读取，实际项目需结合 XSS 防护和认证方案选择。
 
 ---
 
 ## 进阶学习路线
+
+能独立完成基本 CRUD 后再按问题选主题，不需要把下面的名词背完才开始写接口。每学一个工具，都先准备“我现在要定位什么问题”，否则很难理解命令输出。
 
 ### 阶段六：JVM 原理（2～3 周）
 
@@ -433,6 +650,8 @@ Spring Cloud 生态
 
 ### 阶段九：性能调优工具
 
+下面列的是命令用途，不要求初学者现在运行。`<pid>` 要替换为目标 Java 进程 ID；`arthas-boot.jar` 需要另行准备。Arthas 的 `trace` / `watch` 在附加进程后的交互终端中执行，`jcmd` 在系统终端执行，不能把整个代码块一次粘贴成脚本。
+
 ```bash
 # Arthas —— 线上 Java 诊断利器（阿里开源）
 # 无需重启即可排查线上问题
@@ -441,8 +660,8 @@ java -jar arthas-boot.jar
 # 常用命令
 trace com.example.UserService getById  # 追踪方法耗时
 watch com.example.UserService getById returnObj  # 观察返回值
-jmap -heap <pid>    # 查看堆内存
-jstack <pid>        # 线程栈（死锁排查）
+jcmd <pid> GC.heap_info  # 查看堆信息（适用于本章 JDK 21 环境）
+jcmd <pid> Thread.print  # 线程栈（可用于死锁排查）
 ```
 
 ---
@@ -453,9 +672,9 @@ jstack <pid>        # 线程栈（死锁排查）
 
 **Q1：`==` 和 `equals()` 的区别？**
 
-`==` 比较基本类型的值，或引用类型的内存地址（是否是同一个对象）。`equals()` 是方法，默认实现同 `==`，但 `String`、`Integer` 等类重写了它来比较内容。
+`==` 比较基本类型的值，或判断两个引用是否指向同一个对象。`equals()` 是方法，默认实现同 `==`，但 `String`、`Integer` 等类重写了它来比较内容。
 
-⚠️ **坑**：`Integer a = 127; Integer b = 127; a == b; // true`（缓存），但 `Integer a = 128; Integer b = 128; a == b; // false`（新对象）。✅ 始终用 `equals()` 比较对象值。
+例如 `Integer a = 127; Integer b = 127;` 后 `a == b` 为 `true`，因为装箱会复用缓存对象。至少 `-128～127` 有缓存，更大的值可能也被缓存，不能依赖某个大数字比较必为 `false`。比较数值用 `equals()`；可能为 `null` 时可用 `Objects.equals(a, b)`。
 
 ---
 
@@ -465,14 +684,14 @@ jstack <pid>        # 线程栈（死锁排查）
 |-|---------|----------------|----------------|
 | 可变性 | 不可变 | 可变 | 可变 |
 | 线程安全 | ✅（不可变天然安全） | ❌ | ✅（加锁） |
-| 性能 | 拼接慢（每次新建对象） | 快 | 比 StringBuilder 慢 |
+| 拼接特点 | 循环反复拼接可能产生较多临时对象 | 适合循环构建文本 | 单方法同步有开销，性能需测量 |
 | 推荐场景 | 常量字符串 | 单线程字符串拼接 | 多线程字符串拼接（少见） |
 
 ---
 
 **Q3：`ArrayList` 和 `LinkedList` 区别？**
 
-`ArrayList` 基于数组，随机访问 O(1)，末尾增删均摊 O(1)，中间插入 O(n)。`LinkedList` 基于双向链表，随机访问 O(n)，头尾增删 O(1)。**90% 场景用 ArrayList**，内存占用更少，缓存局部性更好。
+`ArrayList` 基于数组，随机访问 O(1)，末尾增删均摊 O(1)，中间插入 O(n)。`LinkedList` 基于双向链表，随机访问 O(n)，头尾增删 O(1)。一般先考虑 `ArrayList`，内存占用更少，缓存局部性更好。
 
 ---
 
@@ -480,7 +699,7 @@ jstack <pid>        # 线程栈（死锁排查）
 
 自动装箱：`int` → `Integer`（自动调用 `Integer.valueOf()`）；拆箱：`Integer` → `int`（自动调用 `.intValue()`）。
 
-**坑**：① `Integer` 缓存范围 -128~127，超出范围 `==` 返回 `false`；② 对 null 的 `Integer` 拆箱会 `NullPointerException`；③ 大量循环中频繁装箱性能差，用基本类型。
+**坑**：① 不要依赖 `Integer` 的对象缓存用 `==` 判断数值；② 对 null 的 `Integer` 拆箱会 `NullPointerException`；③ 大量循环中频繁装箱性能差，用基本类型。
 
 ---
 
@@ -494,7 +713,7 @@ Throwable
     └── 非受检异常（Unchecked / RuntimeException）：可不处理，如 NPE、ArrayIndexOutOfBounds
 ```
 
-✅ 推荐：业务异常继承 `RuntimeException`（非受检），避免强制 try-catch 导致代码臃肿。
+业务异常常使用 `RuntimeException`，但要设计由哪一层处理、映射什么状态，并保留失败原因；不要为了减少 `try/catch` 就吞掉异常。
 
 ---
 
@@ -517,14 +736,15 @@ Throwable
 
 **Q2：`volatile` 能保证原子性吗？**
 
-**不能**。`volatile` 只保证：① **可见性**（修改立即刷回主内存，其他线程立即可见）；② **禁止指令重排序**。但 `i++` 这种复合操作（读-改-写）不是原子的，`volatile` 无法保证。要保证原子性用 `AtomicInteger` 或 `synchronized`。
+**不能保证复合操作原子性**。对同一 `volatile` 变量的写入与后续读取建立可见性和有序性约束，不应理解成“禁止所有重排序”或给出实时到达承诺。`i++` 包含读、加一、写三步，两个线程仍可能覆盖彼此结果。计数可用 `AtomicInteger.incrementAndGet()`，多步不变量可用同一把锁保护。
 
 ---
 
 **Q3：线程池的核心参数有哪些？**
 
 `ThreadPoolExecutor` 的 7 个核心参数：
-1. `corePoolSize`：核心线程数（常驻）
+
+1. `corePoolSize`：核心线程数（通常按需创建，也可预启动；可配置核心线程超时）
 2. `maximumPoolSize`：最大线程数
 3. `keepAliveTime`：非核心线程的空闲存活时间
 4. `unit`：时间单位
@@ -536,15 +756,15 @@ Throwable
 
 **Q4：说说 `ThreadLocal` 的使用场景和内存泄漏问题？**
 
-`ThreadLocal` 为每个线程提供独立副本，常用于：用户登录信息传递（存当前登录用户 ID）、数据库连接管理、事务上下文。
+`ThreadLocal` 让每个线程分别保存一个值，不会自动深拷贝对象。常用于当前线程内的用户信息、数据库连接和事务上下文；跨线程执行时不能假设它会自动传递。
 
-**内存泄漏**：`ThreadLocalMap` 的 key 是弱引用（`ThreadLocal`），value 是强引用。`ThreadLocal` 对象被 GC 后，key 变为 null，但 value 仍被 Map 持有，无法回收。**解决**：使用后调用 `threadLocal.remove()`，尤其是线程池场景（线程复用，不及时清理会污染下一个任务）。
+**内存泄漏**：`ThreadLocalMap` 的 key 是弱引用（`ThreadLocal`），value 是强引用。`ThreadLocal` 对象被 GC 后，key 变为 null，但 value 在对应条目清理或线程结束前仍可能被 Map 持有，延长对象存活时间。**解决**：使用后调用 `threadLocal.remove()`，尤其是线程池场景（线程复用，不及时清理会污染下一个任务）。
 
 ---
 
 **Q5：`ConcurrentHashMap` 和 `HashMap` 的区别？**
 
-`HashMap` 非线程安全，多线程并发 put 可能导致死循环（Java 7）或数据丢失。`ConcurrentHashMap` 线程安全：Java 8 使用 CAS + `synchronized`（锁单个桶而非整个 map），读操作无锁，写操作锁最小粒度，性能远高于 `Hashtable`。
+`HashMap` 不支持无同步的并发修改。`ConcurrentHashMap` 支持并发访问，但 `if (!map.containsKey(k)) map.put(k, v)` 这种多个调用组合起来仍不是原子操作，需用 `putIfAbsent` / `compute` 等。先理解单次调用与组合操作的边界，再研究 JDK 具体实现；不要凭类名断言所有场景的性能。
 
 ---
 
@@ -566,9 +786,9 @@ Throwable
 | `NOT_SUPPORTED` | 挂起当前事务，不使用事务执行 | — |
 | `NEVER` | 必须在无事务环境执行 | — |
 | `MANDATORY` | 必须在事务中执行，否则抛异常 | — |
-| `NESTED` | 嵌套事务（子事务可独立回滚） | — |
+| `NESTED` | 通常通过保存点实现局部回滚，需事务管理器支持 | 先确认 JPA / JDBC 配置能否支持 |
 
-⚠️ **常见坑**：同一个类中方法 A 调用方法 B，B 的 `@Transactional` **不生效**（Spring AOP 基于代理，内部调用绕过代理）。
+默认代理模式下，同一个对象内 A 直接调用 B 会绕过代理，B 声明的事务规则不会重新应用；若 A 已在事务中，B 仍运行于那个已有事务。
 
 ---
 
@@ -580,19 +800,21 @@ Throwable
 
 **Q4：`@RestController` 和 `@Controller` 的区别？**
 
-`@RestController` = `@Controller` + `@ResponseBody`，方法返回值直接序列化为 JSON/XML 写入响应体。`@Controller` 返回视图名（Thymeleaf 模板等），需要在方法上加 `@ResponseBody` 才返回 JSON。✅ 纯 API 项目全部用 `@RestController`。
+`@RestController` 包含 `@Controller` 和 `@ResponseBody` 的语义：返回值通过消息转换器写入响应体。返回对象常得到 JSON，返回 `String` 可得到普通文本，不是所有结果都必定为 JSON。普通 `@Controller` 的 `String` 返回值通常作为视图名；具体行为还取决于返回类型和注解。
 
 ---
 
 **Q5：Spring MVC 的请求处理流程？**
 
-1. 请求到达 `DispatcherServlet`（前端控制器）
-2. `HandlerMapping` 根据 URL 找到对应 Controller 方法
-3. `HandlerAdapter` 调用方法，执行拦截器链（`preHandle`）
-4. 执行 Controller 方法，返回结果
-5. 执行拦截器链（`postHandle`）
-6. `HttpMessageConverter` 将返回值序列化为 JSON 写入响应
-7. 执行拦截器链（`afterCompletion`）
+以同步 REST 接口为例：
+
+1. 请求先经过 Servlet Filter（包括配置好的 Security 过滤器），再到 `DispatcherServlet`。
+2. Spring 查找目标 Controller，执行 MVC 拦截器的 `preHandle`。
+3. 参数解析器读取路径、查询参数和请求体，执行相应校验，再调用 Controller。
+4. Controller 调 Service，返回对象；消息转换器在处理返回值时将对象写入响应。
+5. 随后进入 `postHandle`，最后在完成阶段执行 `afterCompletion`。对于 `@ResponseBody`，不能依赖 `postHandle` 再修改已经写出的响应体。
+
+异常、异步和流式响应有各自分支，以上只是先建立常见请求的顺序感。
 
 ---
 
@@ -604,22 +826,32 @@ Throwable
 |------|------|---------|
 | 《Java 核心技术》卷一（卡尔） | 入门 | 内容权威详细，覆盖 Java 基础到泛型/集合/并发 |
 | 《Effective Java》（布洛克） | 进阶 | 90 条最佳实践，面试必读，每条都是经验精华 |
-| 《深入理解 Java 虚拟机》周志明 | 进阶 | JVM 领域最权威的中文书，面试 JVM 题的标准答案 |
-| 《Java 并发编程实战》 | 进阶 | 并发编程圣经，Doug Lea 参与编写 |
+| 《深入理解 Java 虚拟机》周志明 | 进阶 | 系统学习 JVM；结合实际 JDK 版本理解实现变化 |
+| 《Java 并发编程实战》 | 进阶 | 理解并发设计基础；较早成书，虚拟线程等新特性需另补 |
 | 《Spring Boot 实战》 | Spring | Spring Boot 官方推荐入门书 |
 
 ### 在线资源
 
 | 网站 | 内容 | 推荐理由 |
 |------|------|---------|
-| [Baeldung.com](https://www.baeldung.com) | Spring/Java 教程 | 质量最高的英文 Java 博客，每篇文章深入且实用 |
+| [Baeldung.com](https://www.baeldung.com) | Spring/Java 教程 | 按具体问题查教程，留意示例使用的版本 |
 | [spring.io/guides](https://spring.io/guides) | Spring 官方指南 | 每个 Guide 15 分钟，覆盖常见集成场景 |
 | [LeetCode](https://leetcode.cn) | 算法练习 | 用 Java 刷题，语法熟练后做 Hot 100 |
-| [CS Notes](https://cyc2018.xyz) | 面试综合 | 中文质量最高的 Java 面试复习资料 |
+| [CS Notes](https://cyc2018.xyz) | 面试综合 | 复习知识点，结合当前 JDK 和源码核对 |
 
 ### 开源项目（读源码）
 
 | 项目 | 学习重点 |
 |------|---------|
-| [spring-petclinic](https://github.com/spring-projects/spring-petclinic) | Spring Boot 官方示例，最标准的项目结构 |
-| [mall
+| [spring-petclinic](https://github.com/spring-projects/spring-petclinic) | Spring 示例项目，沿一个接口学习分层和测试 |
+| [mall](https://github.com/macrozheng/mall) | 电商项目的模块划分；入门阶段先读一个具体接口的调用链 |
+
+## 本章自测
+
+1. **文章存入 Map 后，重启应用还在吗？** 不在；Map 是进程内存，需要持久存储才能跨重启保留。
+2. **用户已登录，能改任意文章吗？** 不能；认证只确定身份，Service 还要比较文章作者和当前用户。
+3. **`Page<Article>` 转成 `Page<ArticleDTO>` 会再查一页吗？** `map` 本身转换当前页对象；转换中访问懒加载关联可能额外发 SQL，需要检查实际查询。
+4. **前端超时后再点一次创建，一定只保存一篇吗？** 不一定；原请求可能仍在服务端执行，要查询结果并为真实业务设计防重复机制。
+5. **内存练习和数据库版的响应能用同一段 `.data.data` 解析吗？** 不能直接假设；练习直接返回文章，数据库版约定了 `ApiResponse`，先确认原始响应结构。
+
+*← [上一章：Spring Boot](./05-spring-boot.md) | [进阶：并发编程](./04-concurrency.md) | [返回学习路线](./index.md) →*
