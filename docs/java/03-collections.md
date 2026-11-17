@@ -429,21 +429,51 @@ Stream 用来描述“这批数据要经过哪些处理”。它不是保存数�
 
 ### JS vs Java Stream 完整对比
 
-| JS 数组方法 | Java Stream | 含义 |
-|------------|-------------|------|
-| `.filter(fn)` | `.filter(fn)` | 只保留符合条件的 |
-| `.map(fn)` | `.map(fn)` | 把每一项转换成另一项 |
-| `.flatMap(fn)` | `.flatMap(fn)` | 把每项展开，再接成一条流 |
-| `.reduce(fn, init)` | `.reduce(init, fn)` | 累积成一个结果 |
-| `.forEach(fn)` | `.forEach(fn)` | 对元素执行操作，结束这条流 |
-| `.find(fn)` | `.filter(fn).findFirst()` | 找到第一项，结果可能为空 |
-| `.some(fn)` / `.every(fn)` | `.anyMatch(fn)` / `.allMatch(fn)` | 判断是否有任意项/所有项满足条件 |
-| `.slice(s, e)` | `.skip(s).limit(e-s)` | 跳过前 s 项，最多取 e-s 项 |
-| `[...new Set(arr)]` | `.distinct()` | 去重 |
-| `.sort(fn)` | `.sorted(comparator)` | 对流排序，不改原列表 |
-| `.length` | `.count()` | 流中元素数量 |
+| JS 数组方法 | Java Stream | 类型 | 含义 |
+|------------|-------------|------|------|
+| `.filter(fn)` | `.filter(fn)` | 中间操作 | 只保留符合条件的 |
+| `.map(fn)` | `.map(fn)` | 中间操作 | 把每一项转换成另一项 |
+| `.flatMap(fn)` | `.flatMap(fn)` | 中间操作 | 把每项展开，再接成一条流 |
+| `.reduce(fn, init)` | `.reduce(init, fn)` | 终止操作 | 累积成一个结果 |
+| `.forEach(fn)` | `.forEach(fn)` | 终止操作 | 对元素执行操作，结束这条流 |
+| `.find(fn)` | `.filter(fn).findFirst()` | 终止操作 | 找到第一项，结果可能为空 |
+| `.some(fn)` / `.every(fn)` | `.anyMatch(fn)` / `.allMatch(fn)` | 终止操作 | 判断是否有任意项/所有项满足条件 |
+| `.slice(s, e)` | `.skip(s).limit(e-s)` | 中间操作 | 跳过前 s 项，最多取 e-s 项 |
+| `[...new Set(arr)]` | `.distinct()` | 中间操作 | 去重 |
+| `.sort(fn)` | `.sorted(comparator)` | 中间操作 | 对流排序，不改原列表 |
+| `.length` | `.count()` | 终止操作 | 统计流中元素数量 |
 
-常见的结束方式还有 `.toList()`（得到列表）、`.sum()`（求和）和 `.collect(...)`（按规则收集）。这些叫**终止操作**。
+### 中间操作和终止操作（重点）
+
+把 Stream 想成一条“数据处理流水线”：
+
+- **中间操作**：登记处理规则，并返回另一条 Stream，所以还能继续 `.filter()`、`.map()`。例如 `filter`、`map`、`sorted`、`distinct`。
+- **终止操作**：按前面登记的规则处理数据，拿到最终结果，并结束这条 Stream。例如 `toList()`、`count()`、`collect()`、`forEach()`、`reduce()`。
+
+“终止”不是 Java 程序结束，而是**这条 Stream 不能再继续使用**。终止操作通常返回列表、数字、`Optional` 或 `void`，不再返回 Stream。
+
+```java
+List<Integer> numbers = List.of(1, 2, 3, 4);
+
+Stream<Integer> pipeline = numbers.stream()
+    .filter(n -> n % 2 == 0); // 中间操作：只登记“保留偶数”规则，还没开始遍历
+
+List<Integer> evens = pipeline.toList(); // 终止操作：现在才执行，得到 [2, 4]
+System.out.println(evens);
+// pipeline.count(); // 错误：同一条 Stream 已经终止，不能再次使用
+```
+
+如果只写中间操作，没有终止操作，规则不会真正执行：
+
+```java
+numbers.stream()
+    .filter(n -> {
+        System.out.println("检查 " + n);
+        return n % 2 == 0;
+    }); // 没有 count、toList 等终止操作，不会打印“检查”
+```
+
+需要再次处理原数据时，重新调用 `numbers.stream()` 创建一条新 Stream。
 
 ### 基础用法
 
@@ -471,7 +501,7 @@ List<Integer> result = nums.stream() // 从列表建立处理流程
     .filter(n -> n % 2 == 0)         // 保留 2、4、6
     .map(n -> n * n)                 // 转换成 4、16、36
     .filter(n -> n > 20)             // 只留下 36
-    .toList();                      // 执行处理，得到结果列表
+    .toList();                       // 终止操作：执行前面的规则，得到结果列表
 System.out.println(result);         // [36]
 System.out.println(nums);           // [1, 2, 3, 4, 5, 6]，原列表未改
 ```
