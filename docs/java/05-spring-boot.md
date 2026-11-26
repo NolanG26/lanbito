@@ -171,9 +171,137 @@ public class HelloController {
 }
 ```
 
-构造器 `HelloController(HelloService helloService)` 表示“创建控制器时，必须交给我一个业务对象”。`this.helloService` 是字段，右边的 `helloService` 是参数。只有一个构造器时，Spring 可以自动把已经创建的 `HelloService` 传进去，不需要 `@Autowired`。普通 Java 手动写法相当于 `new HelloController(new HelloService())`。
+#### this.helloService 和参数 helloService 有什么区别？
 
-请求现在走 `浏览器 → HelloController.hello → HelloService.greet → 响应正文`，结果与刚才相同。这就是依赖注入（DI）；由 Spring 负责创建、组装对象的方式叫控制反转（IoC）。
+`HelloService` 是类型名，`helloService` 是我们起的变量名。构造器 `HelloController(HelloService helloService)` 表示“创建控制器时，必须传给我一个服务对象”；构造器与类同名，没有返回类型。
+
+赋值语句可以这样拆开读：
+
+```java
+this.helloService = helloService;
+//   ↑                 ↑
+// 当前控制器的字段    构造器收到的参数
+```
+
+它的意思是：**把传进来的服务对象，保存到当前控制器里，供其他方法使用。** 左右两边引用同一个对象，不是各创建了一份服务。
+
+把参数换一个名字更容易看清。下面是上面构造器的等价写法，用来对照，不要再添加第二个同参数类型的构造器：
+
+```java
+public HelloController(HelloService service) {
+    this.helloService = service;
+}
+```
+
+`private final HelloService helloService` 声明保存服务的字段；`final` 表示赋值后不能再让这个字段指向另一个对象。构造器的参数只在构造器内可用，保存为字段后，`hello()` 才能通过 `helloService.greet(name)` 使用它。
+
+#### Spring 替我做了哪一步？
+
+普通 Java 中，可以在调用处自己创建并组装对象：
+
+```java
+HelloService service = new HelloService();
+HelloController controller = new HelloController(service);
+```
+
+在本例的 Spring 项目中，框架负责这段创建和传入的工作：
+
+```text
+扫描到 @Service 标记的 HelloService → 创建服务对象
+                  ↓
+扫描到 @RestController 标记的 HelloController
+                  ↓
+调用控制器构造器，把服务对象传给参数 helloService
+                  ↓
+构造器执行 this.helloService = helloService，保存服务对象
+```
+
+前提是两个类都在扫描范围内。本例与 `DemoApplication` 位于同一个包，满足默认扫描规则；如果类放在扫描范围以外，单独加注解也不会自动注册。
+
+**只有一个构造器时，Spring 默认用它接收依赖，可以省略 `@Autowired`。** 当前只有一个匹配的 `HelloService` 对象，因此 Spring 能确定传入谁；有多个候选对象时还需明确选择，不能只凭同名字段判断。
+
+这就叫依赖注入（DI）：控制器需要服务，由框架提供。由 Spring 负责创建、组装对象的方式叫控制反转（IoC）。框架管理的对象也叫 **Bean**。
+
+#### 用了 Spring，我怎么调用接口？
+
+通过 HTTP 请求调用 Controller。刚才改了 Java 文件，若应用仍在运行，在原终端按 `Ctrl+C` 停止后重新执行 `./mvnw spring-boot:run`；本例没有配置自动重启。
+
+再用浏览器打开 `http://localhost:8080/hello?name=Alice`，或在另一个终端执行：
+
+```bash
+curl 'http://localhost:8080/hello?name=Alice'
+# 响应正文：你好，Alice
+```
+
+请求按下面的顺序流转：
+
+```text
+浏览器请求 GET /hello?name=Alice
+                  ↓
+Spring 根据 @GetMapping("/hello") 找到 hello() 方法
+                  ↓
+@RequestParam 把 Alice 交给方法参数 name
+                  ↓
+hello() 调用 helloService.greet(name)
+                  ↓
+greet() 返回“你好，Alice” → hello() 返回这个字符串
+                  ↓
+Spring 将字符串写入 HTTP 响应 → 浏览器收到文字
+```
+
+这里 `helloService.greet(name)` 仍是你写的普通 Java 方法调用。**Spring 负责创建对象、传入依赖、把请求交给对应方法；方法里的业务逻辑由你编写。**
+
+这两个 Spring 组件默认是单例，通常在应用启动时创建，后续请求复用它们。访问一次 URL 不代表重新调用一次控制器构造器；每次请求的 `name` 保存在方法参数中，不要存进共享字段。
+
+### 和 Midway 是不是差不多？
+
+**是的，Controller 接请求、Service 处理业务、容器注入对象，这部分思路很接近。** 如果写过 Midway，可以先按下面的用途对应起来：
+
+| 要做什么 | Midway 常见写法 | 本例 Spring 写法 |
+|----------|----------------|------------------|
+| 标记控制器 | `@Controller('/')` | `@RestController` |
+| 声明 GET 路由 | `@Get('/hello')` | `@GetMapping("/hello")` |
+| 读取查询参数 | `@Query('name')` | `@RequestParam(name = "name")` |
+| 把服务交给容器管理 | `@Provide()` | `@Service` |
+| 让容器提供服务对象 | 属性上的 `@Inject()` | 构造器参数；只有一个构造器时可省略 `@Autowired` |
+| 调用业务方法 | `this.helloService.greet(name)` | `helloService.greet(name)`；也能显式写 `this.helloService.greet(name)` |
+
+例如，在已经配置好的 Midway Web 项目中，可以用下面两个文件对照前面的 Spring 示例；它们不是可以直接用 `node` 运行的独立脚本：
+
+```typescript
+// src/service/hello.ts
+import { Provide } from '@midwayjs/core';
+
+@Provide()
+export class HelloService {
+  greet(name: string): string {
+    return `你好，${name}`;
+  }
+}
+```
+
+```typescript
+// src/controller/hello.ts
+import { Controller, Get, Inject, Query } from '@midwayjs/core';
+import { HelloService } from '../service/hello';
+
+@Controller('/')
+export class HelloController {
+  @Inject()
+  helloService: HelloService;
+
+  @Get('/hello')
+  async hello(@Query('name') name: string): Promise<string> {
+    return this.helloService.greet(name || 'Java');
+  }
+}
+```
+
+对于这个例子，两边都把 `GET /hello?name=Alice` 交给控制器，再调用服务，返回 `你好，Alice`。两边都不需要在处理每次请求时手动 `new HelloService()`。
+
+**一个需要注意的区别是对象生命周期：**按 Midway 官方文档的默认配置，Controller 和 `@Provide()` 服务是请求作用域，同一请求链路复用对象，新请求会创建新的实例；本章的 Spring Controller 和 Service 默认是单例，多次请求复用同一个对象。项目可另行配置服务作用域，判断共享状态是否安全时应核对实际配置。
+
+上面对照的是用途：Midway 使用 TypeScript 装饰器，本例 Spring 使用 Java 注解和构造器注入，Midway 也有版本相关的注入方式。异步处理和具体配置仍要分别理解，不能把 Midway 的 `async`/`await` 直接搬进 Java。可对照 [Midway 路由和控制器](https://midwayjs.org/docs/controller)与[依赖注入](https://midwayjs.org/docs/container)继续查阅。
 
 ### 核心注解速查表
 
@@ -185,7 +313,7 @@ public class HelloController {
 | `@Service` | 标记为服务类（业务逻辑） | `@Injectable()` |
 | `@Repository` | 标记为数据访问类 | — |
 | `@Component` | 通用 Spring 组件 | `@Injectable()` |
-| `@Autowired` | 依赖注入（不推荐，用构造器注入）| `constructor(private svc: Svc)` |
+| `@Autowired` | 指定注入点，也可标在构造器上；单构造器通常可省略 | 通过框架提供依赖 |
 | `@Value("${key}")` | 注入配置值 | `process.env.KEY` |
 | `@Configuration` | 配置类 | — |
 | `@Bean` | 在配置类中声明 Bean | — |

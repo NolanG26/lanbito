@@ -753,6 +753,76 @@ System.out.println(displayName); // UNKNOWN
 
 `ofNullable` 把可能为空的值放进容器；有值才执行 `map`，没有值就一路保持空，最后 `orElse` 给默认值。用途近似 `name?.toUpperCase() ?? 'UNKNOWN'`，但 Java 的返回类型和调用方式不同。
 
+### 读懂一条完整的 Optional 链
+
+下面把“根据 ID 查用户，再取姓名并转大写”写成一个完整例子，保存为 `Main.java`，用 JDK 21 执行 `java Main.java`：
+
+```java
+import java.util.Optional;
+
+public class Main {
+    static User getUserById(long id) {
+        return id == 1 ? new User("Alice") : null;
+    }
+
+    public static void main(String[] args) {
+        String result = Optional.ofNullable(getUserById(1))
+            .map(User::getName)
+            .map(String::toUpperCase)
+            .orElse("UNKNOWN");
+
+        System.out.println(result); // ALICE
+
+        String missing = Optional.ofNullable(getUserById(2))
+            .map(User::getName)
+            .map(String::toUpperCase)
+            .orElse("UNKNOWN");
+
+        System.out.println(missing); // UNKNOWN
+    }
+}
+
+record User(String name) {
+    // record 默认生成 name()；这里额外提供 getName()，模拟普通 JavaBean
+    public String getName() {
+        return name;
+    }
+}
+```
+
+按类型变化读这条链：
+
+| 代码 | 此时的类型 | 作用 |
+|------|------------|------|
+| `Optional.ofNullable(getUserById(1))` | `Optional<User>` | 用户存在就装入；返回 `null` 就得到空容器 |
+| `.map(User::getName)` | `Optional<String>` | 有用户时调用 `user.getName()`，取出姓名 |
+| `.map(String::toUpperCase)` | `Optional<String>` | 有姓名时调用 `name.toUpperCase()` |
+| `.orElse("UNKNOWN")` | `String` | 有值就取值，空了就返回默认文本 |
+
+这里的两个方法引用可以先改写成 Lambda：
+
+```java
+.map(User::getName)       // 等价于 .map(user -> user.getName())
+.map(String::toUpperCase) // 等价于 .map(name -> name.toUpperCase())
+```
+
+如果 `getUserById(2)` 返回 `null`，第一个 `map` 和第二个 `map` 都会跳过，不会调用空对象的方法，最后得到 `"UNKNOWN"`。如果 `getName()` 自己返回 `null`，`Optional.map` 也会把结果视为空。
+
+不用 Optional 时，逻辑大致是：
+
+```java
+long id = 2;
+User user = getUserById(id);
+String result;
+if (user == null || user.getName() == null) {
+    result = "UNKNOWN";
+} else {
+    result = user.getName().toUpperCase();
+}
+```
+
+这个例子展示的是“可能没有结果时如何继续转换”，不是要求所有字段和局部变量都使用 Optional。
+
 | 创建方式 | 结果 |
 |----------|------|
 | `Optional.of("hello")` | 有值的容器；传 `null` 会抛异常 |
