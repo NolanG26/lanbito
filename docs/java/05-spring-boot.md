@@ -317,7 +317,7 @@ export class HelloController {
 | `@Value("${key}")` | 注入配置值 | `process.env.KEY` |
 | `@Configuration` | 配置类 | — |
 | `@Bean` | 在配置类中声明 Bean | — |
-| `@Transactional` | 事务管理 | — |
+| `@Transactional` | 让同一事务的数据库操作一起提交或回滚 | — |
 | `@Slf4j` (Lombok) | 注入日志 | `console.log` |
 
 ---
@@ -577,6 +577,68 @@ public interface UserRepository extends JpaRepository<User, Long> {
 
 `findByNameContaining("Al", pageable)` 可理解为查询名字包含 `Al` 的一页用户。`@Query` 的 JPQL 写实体名 `User` 和字段名 `createdAt`；`nativeQuery = true` 才写真实表名 `users` 和列名 `created_at`。最后的 `updateStatus` 返回影响行数，不是更新后的用户对象。
 
+### 从代码理解事务
+
+**事务就是把几次数据库操作当成一件事：要么全部提交，要么失败时回滚已经做的修改。** “提交”表示最终保存这些修改，“回滚”表示撤销这个事务中的数据库修改。
+
+比如 A 给 B 转 100 元，需要完成两次数据库修改：A 扣 100 元，B 加 100 元。下面是放在 Spring 管理的 Service 中的方法片段：
+
+```java
+@Transactional
+public void transfer(long fromId, long toId, BigDecimal amount) {
+    // 第一步：修改数据库，让 A 的余额减少
+    accountRepository.decreaseBalance(fromId, amount);
+
+    // 第二步：修改数据库，让 B 的余额增加
+    accountRepository.increaseBalance(toId, amount);
+}
+```
+
+`@Transactional` 来自 `org.springframework.transaction.annotation`；`BigDecimal` 来自 `java.math`，这里表示转账金额。`fromId` 是转出账户 ID，`toId` 是转入账户 ID。
+
+这是事务结构示例，不能单独复制运行：假设 Service 已通过构造器注入 `AccountRepository accountRepository`，且它的两个方法都执行数据库更新、参与当前同一个事务。具体实现没有展开；它们需要检查账户、金额、余额和更新结果，失败时抛出异常，不能把“没有更新到记录”也当作成功。完整转账还需要处理并发余额竞争，事务本身不代替这些业务检查。
+
+先按最常见的情况理解：Controller 通过 Spring 注入的 Service 调用 `transfer()`，外层没有已有事务：
+
+```text
+Controller 调用 transfer()
+          ↓
+Spring 开启数据库事务
+          ↓
+A 扣款 → B 入账
+          ↓
+方法正常结束 → Spring 尝试提交 → 提交成功，两笔修改最终保存
+
+如果 B 入账时抛出 RuntimeException，并传播出 transfer()：
+Spring 回滚事务 → A 的扣款也被撤销
+```
+
+**第一步执行成功，不代表第一步已经单独提交。** 对比一下结果：
+
+| 情况 | 没有把两步放进同一事务，且每步各自提交 | 两步在同一事务中 |
+|------|--------------------------------------|------------------|
+| 两步执行成功，提交也成功 | A 扣钱，B 收到钱 | A 扣钱，B 收到钱 |
+| A 扣款成功，B 入账抛出运行时异常 | A 已扣钱，B 没收到 | 回滚，A 的扣款也被撤销 |
+
+所以这段代码中的 `@Transactional` 可以先读成：“Spring，请把这个方法里的数据库操作放在一个事务里。” Spring 负责开启事务、提交或回滚，你负责写数据库操作和业务失败的判断。
+
+如果调用方已经开启了事务，`@Transactional` 默认会加入它，由外层决定最终提交；不能仅凭这个方法返回，就认为修改已经提交。JPA 的 `save()`、执行 SQL、把修改刷新到数据库，也都不等于最终提交；提交本身仍可能失败。
+
+#### 哪些失败会回滚？
+
+- **默认规则**：`RuntimeException` 或 `Error` 传播到 Spring 的事务代理时触发回滚。代理可以先理解为“Spring 包在方法外面、负责事务处理的一层调用”。
+- **受检异常**：例如 `IOException`，默认不因它回滚。需要时可把注解写成 `@Transactional(rollbackFor = IOException.class)`；希望包含所有 `Exception` 子类时可用 `rollbackFor = Exception.class`，仍要按业务选择。
+- **捕获异常后不再抛出**：Spring 可能看到方法正常返回而尝试提交，不能认为打印了错误就会回滚；某些底层错误也可能已经把事务标记为只能回滚。
+- **返回 `false` 或影响行数为 `0`**：这些返回值本身不会触发回滚。若它们表示业务失败，需要由代码判断并抛出相应异常。
+
+#### 注解生效和回滚的范围
+
+本章使用 Spring 默认的代理方式。应像前面的 Controller 一样，通过 Spring 注入的 Service 对象调用事务方法。自己 `new` 一个 Service，或同一个对象内部用 `this.transfer(...)` 调用，不会触发这个方法的事务代理；如果调用方已经有事务，内部操作仍可能参与那个事务。
+
+**回滚的是参与同一个事务的数据库修改，不是把整个 Java 程序倒放。** 已经发出的短信、HTTP 请求，以及日志、内存对象和缓存修改，不会因为数据库回滚就自动撤销。
+
+接下来的 Service 示例中，`@Transactional(readOnly = true)` 表示这段事务以查询为主，向框架和数据库表达只读意图；它不是访问权限控制，也不保证一定更快。普通的 `@Transactional` 则用于创建、修改、删除等业务操作。
+
 ### Service 层
 
 先只读 `getById`：数据库查 ID → 没找到则抛异常 → 找到后转 DTO。这比一次记住整个类更容易。`PasswordEncoder` 的 Bean 见 Security 配置；暂时不做注册功能时，可先只保留查询相关方法和 `UserRepository` 依赖。
@@ -649,7 +711,7 @@ public class UserService {
 }
 ```
 
-分页参数目前尚未增加边界校验；实际接口要拒绝负页码、限制单页大小，避免非法输入变成业务异常或超大查询。这里的 `this::toDTO` 等价于 `user -> toDTO(user)`，把一页中的每位用户转换成响应数据。`orElseThrow(() -> new ...)` 的意思是“查不到时才创建并抛出异常”。`@Transactional` 通常由外部通过 Spring 代理调用时生效；同一个对象内部直接调用自己的另一个方法，不会新触发那一层事务代理。
+分页参数目前尚未增加边界校验；实际接口要拒绝负页码、限制单页大小，避免非法输入变成业务异常或超大查询。这里的 `this::toDTO` 等价于 `user -> toDTO(user)`，把一页中的每位用户转换成响应数据。`orElseThrow(() -> new ...)` 的意思是“查不到时才创建并抛出异常”。
 
 下例是 `UserDTO.java`，只保留可返回给客户端的字段，故意不含 `password`：
 
